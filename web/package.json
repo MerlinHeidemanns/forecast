@@ -1,0 +1,12 @@
+{
+  "name": "polling-analysis",
+  "version": "1.0.0",
+  "description": "Election polling analysis website",
+  "scripts": {
+    "build": "echo 'No build step needed'",
+    "start": "serve ."
+  },
+  "dependencies": {
+    "serve": "^14.0.0"
+  }
+}
