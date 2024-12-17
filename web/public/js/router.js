@@ -1,13 +1,18 @@
-// Add active class to current nav link
 const setActiveLink = () => {
     const currentPath = window.location.pathname;
+    // Remove trailing slash if present for consistency
+    const normalizedPath = currentPath.replace(/\/$/, '');
+
     document.querySelectorAll('nav a').forEach(link => {
         const linkPath = link.getAttribute('href');
-        link.classList.toggle('active', currentPath.endsWith(linkPath));
+        // Exact match comparison
+        const isActive = normalizedPath === linkPath ||
+            (linkPath === '/' && normalizedPath === '');
+        link.classList.toggle('active', isActive);
     });
 };
 
-// Initialize router
+// Initialize router when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     setActiveLink();
 });

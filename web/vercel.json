@@ -1,12 +1,8 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "outputDirectory": ".",
+  "outputDirectory": "public",
   "builds": [
-    {
-      "src": "*.html",
-      "use": "@vercel/static"
-    },
     {
       "src": "public/**/*",
       "use": "@vercel/static"
@@ -26,12 +22,8 @@
       "dest": "/forecasts.html"
     },
     {
-      "src": "/public/(.*)",
-      "dest": "/public/$1"
-    },
-    {
       "src": "/(.*)",
-      "dest": "/$1"
+      "dest": "/public/$1"
     }
   ]
 }
