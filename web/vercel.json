@@ -9,20 +9,8 @@
   ],
   "routes": [
     {
-      "src": "/",
-      "dest": "/index.html"
-    },
-    {
-      "src": "/about",
-      "dest": "/about.html"
-    },
-    {
-      "src": "/forecasts",
-      "dest": "/forecasts.html"
-    },
-    {
       "src": "/(.*)",
-      "dest": "/$1"
+      "dest": "/public/$1"
     }
   ]
 }
