@@ -51,8 +51,8 @@ const contextChart = svg.append("g")
     .attr("transform", `translate(${margin.left},${height + margin.top + 40})`);
 
 Promise.all([
-    d3.csv("/public/polling_data/Allensbach/current.csv"),
-    d3.csv("/public/polling_data/Allensbach/historic.csv")
+    d3.csv("/polling_data/Allensbach/current.csv"),
+    d3.csv("/polling_data/Allensbach/historical.csv")
 ]).then(([data1, data2]) => {
     // Process and combine the data
     const combinedData = [...data1, ...data2]
