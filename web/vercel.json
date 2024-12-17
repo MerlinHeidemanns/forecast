@@ -9,6 +9,14 @@
   ],
   "routes": [
     {
+      "src": "/about",
+      "dest": "/public/about.html"
+    },
+    {
+      "src": "/forecasts",
+      "dest": "/public/forecasts.html"
+    },
+    {
       "src": "/(.*)",
       "dest": "/public/$1"
     }
