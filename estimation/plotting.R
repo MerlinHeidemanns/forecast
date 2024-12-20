@@ -140,11 +140,11 @@ compare_vote_shares <- function(fit, data_list, party_names = c("CDU/CSU", "FDP"
   #' @param party_names Vector of party names in order (default German parties)
   #' @return A ggplot object showing prior and posterior comparisons
   
-  # Extract posterior draws for mu_f and convert to data frame
-  posterior_draws <- fit$draws("mu_f") %>%
+  # Extract posterior draws for trend_mean and convert to data frame
+  posterior_draws <- fit$draws("trend_mean") %>%
     posterior::as_draws_df() %>%
-    # Add reference category (mu_f[0] = 0) and draw number
-    mutate(`mu_f[0]` = 0,
+    # Add reference category (trend_mean[0] = 0) and draw number
+    mutate(`trend_mean[0]` = 0,
            draw = 1:n()) %>%
     # Remove unnecessary columns (those containing ".")
     select(!contains(".")) %>%
@@ -164,9 +164,9 @@ compare_vote_shares <- function(fit, data_list, party_names = c("CDU/CSU", "FDP"
     posterior_draws %>%
       mutate(
         kind = "Prior",
-        val = rnorm(n(), 0, data_list$prior_mu_f_sigma),
+        val = rnorm(n(), 0, data_list$prior_trend_mean_sigma),
         # Ensure reference category remains 0
-        val = ifelse(var == "mu_f[0]", 0, val)
+        val = ifelse(var == "trend_mean[0]", 0, val)
       )
   ) %>%
     # Calculate exponential means within each draw
@@ -340,7 +340,7 @@ plot_length_scale_comparison <- function(fit, prior_mean, prior_sd = 10,
   dir.create(save_path, recursive = TRUE, showWarnings = FALSE)
   
   # Extract posterior draws and prepare for plotting
-  posterior_draws <- fit$draws("trend_length_scale") %>%
+  posterior_draws <- fit$draws("trend_short_term_length_scale") %>%
     posterior::as_draws_df() %>%
     select(!contains(".")) %>%
     pivot_longer(
@@ -354,7 +354,7 @@ plot_length_scale_comparison <- function(fit, prior_mean, prior_sd = 10,
   prior_draws <- data.frame(
     value = abs(rnorm(nrow(posterior_draws), prior_mean, prior_sd)),
     distribution = "Prior",
-    parameter = "trend_length_scale"
+    parameter = "trend_short_term_length_scale"
   )
   
   # Combine draws and ensure factor ordering
@@ -602,7 +602,10 @@ plot_party_correlations <- function(fit, party_names, n_draws = 25,
 plot_vote_share_trends <- function(fit, input_data, 
                                    index_date,
                                    df, 
-                                   save_path = "estimation/plt/trends/") {
+                                   election_dates, 
+                                   cutoff_date,
+                                   save_path = "estimation/plt/trends/"
+                                   ) {
   
   # Traditional German party colors
   party_colors <- c(
@@ -615,9 +618,9 @@ plot_vote_share_trends <- function(fit, input_data,
   )
   
   # Prepare trend data
-  trend_data <- fit$summary("trend", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
+  trend_data <- fit$summary("trend_shares", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
     mutate(
-      ix_date_aggregate = as.integer(str_match(variable, "(\\d+),")[, 2]),
+      layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
       ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
       party = factor(
         c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")[ix_party],
@@ -625,8 +628,16 @@ plot_vote_share_trends <- function(fit, input_data,
       )
     ) %>%
     right_join(index_date %>% 
-                select(date, ix_date_aggregate))
+                select(date, layer1_aggregate_idx))
   
+  
+  # Filter election dates to those within data range
+  relevant_elections <- election_dates %>%
+    filter(
+      date >= min(trend_data$date),
+      date <= max(trend_data$date)
+    )
+
   # Prepare observed data
   observed_data <- df %>% 
     mutate(party = ifelse(party == "REP", "Sonstige", party)) %>%
@@ -697,7 +708,50 @@ plot_vote_share_trends <- function(fit, input_data,
       x = "Date",
       y = "Vote Share",
       caption = "Points show observed data. Bands show 50% (darker) and 95% (lighter) credible intervals."
+    ) +
+    # Add election date markers
+    geom_vline(
+      data = relevant_elections,
+      aes(xintercept = date),
+      linetype = "dashed",
+      color = "darkred",
+      alpha = 0.5
+    ) +
+    # Add election date labels
+    geom_text(
+      data = relevant_elections,
+      aes(
+        x = date,
+        y = max(trend_data$`97.5%`),
+        label = format(date, "%b %Y")
+      ),
+      angle = 90,
+      hjust = 0.25,
+      vjust = -0.5,
+      size = 3,
+      color = "darkred",
+      inherit.aes = FALSE
+    ) +
+    geom_vline(
+      data = data.frame(date = cutoff_date),
+      aes(xintercept = date),
+      linetype = "twodash",
+      alpha = 0.75
+    ) +
+    geom_text(
+      data = data.frame(date = cutoff_date),
+      aes(
+        x = date,
+        y = max(trend_data$`97.5%`),
+        label = "Data cutoff"
+      ),
+      angle = 90,
+      hjust = 0.25,
+      vjust = -0.5,
+      size = 3,
+      inherit.aes = FALSE
     )
+
   
   # Save plot
   ggsave(
@@ -721,16 +775,16 @@ plot_vote_share_trends <- function(fit, input_data,
 #' @param save_path Directory path for saving plots (default: "estimation/plt/uncertainty/")
 #' @return ggplot object showing sigma trend with election markers
 plot_trend_volatility <- function(fit, index_date, 
+                                  election_dates,
                                    save_path = "estimation/plt/trends") {
   # Prepare trend uncertainty data
-  trend_sigma <- fit$summary("sigma", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
-    filter(grepl(",1", variable)) %>%
+  trend_sigma <- fit$summary("volatility_short_term", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
     mutate(
-      ix_week_aggregate = as.integer(str_match(variable, "(\\d+),")[,2])
+      layer2_aggregate_idx = as.integer(str_match(variable, "(\\d+)")[,2])
     ) %>%
     right_join(
       index_date %>%
-        distinct(date, ix_week_aggregate)
+        distinct(date, layer2_aggregate_idx)
     )
   
   # Filter election dates to those within data range

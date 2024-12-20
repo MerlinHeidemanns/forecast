@@ -10,8 +10,9 @@ POLL_DATA_DIR <- "web/public/polling_data/"
 
 
 # Define the time period for grouping (can be adjusted)
-TIME_PERIOD <- "7 days"
-WEEK_PERIOD <- "14 days"  # Twice the daily rate
+LAYER1_PERIOD <- "7 days"
+LAYER2_PERIOD <- "14 days"  # Twice the daily rate
+LAYER3_PERIOD <- "quarter"
 
 LEFT_PARTY_NAMES <- c(
   "LinkePDS" = "LINKE",
@@ -24,7 +25,7 @@ df = load_institute_data("Allensbach", POLL_DATA_DIR)
 # Apply party name standardization
 df <- df %>%
   mutate(
-    party = if_else(party %in% LEFT_PARTY_NAMES, "LINKE", party)
+    party = if_else(party %in% names(LEFT_PARTY_NAMES), "LINKE", party)
   )
 
 # Initial data transformation
@@ -42,14 +43,14 @@ df <- df %>%
                            mean(survey_count, na.rm = TRUE),
                            survey_count),
     # Group dates into periods
-    date_aggregate = floor_date(date, unit = TIME_PERIOD)
+    layer1_aggregate = floor_date(date, unit = LAYER1_PERIOD)
   ) %>%
   # Filter and select relevant columns
   filter(
-    date < as.Date("2003-01-01"),
+    date < as.Date("2008-01-01"),
     !is.na(vote_share)
   ) %>%
-  select(uuid, date, date_aggregate,
+  select(uuid, date, layer1_aggregate,
          survey_count, party, pollster, vote_share)
 
 # Create party index
@@ -69,16 +70,19 @@ index_date <- data.frame(
   date = seq(min(df$date), max(df$date), by = 1)
 ) %>%
   mutate(
-    date_aggregate = floor_date(date, unit = TIME_PERIOD),
-    week_aggregate = floor_date(date, unit = WEEK_PERIOD),
+    layer1_aggregate = floor_date(date, unit = LAYER1_PERIOD),
+    layer2_aggregate = floor_date(date, unit = LAYER2_PERIOD),
+    layer3_aggregate = floor_date(date, unit = LAYER3_PERIOD),
     # First create a simple sequence of week numbers
-    ix_week_aggregate = dense_rank(week_aggregate)
+    layer2_aggregate_idx = dense_rank(layer2_aggregate),
+    layer3_aggregate_idx = dense_rank(layer3_aggregate)
   )
 
 index_date_aggregate = index_date %>%
-  distinct(date_aggregate, week_aggregate, ix_week_aggregate) %>%
-  arrange(date_aggregate) %>%
-  mutate(ix_date_aggregate = row_number())
+  distinct(layer1_aggregate, layer2_aggregate, layer3_aggregate,
+           layer2_aggregate_idx, layer3_aggregate_idx) %>%
+  arrange(layer1_aggregate) %>%
+  mutate(layer1_aggregate_idx = row_number())
 
 index_date = index_date %>%
   left_join(index_date_aggregate)
@@ -99,6 +103,7 @@ df_pollster_rounding = lapply(index_pollster$pollster, function(i){
 
 # Transform input data
 input_data <- df %>%
+  filter(date < max(date) - 240) %>%
   mutate(y = floor(vote_share / 100 * survey_count)) %>%
   select(-vote_share) %>%
   pivot_wider(
@@ -114,20 +119,19 @@ input_data <- df %>%
   filter(!is.na(Sonstige)) %>%
   left_join(df_pollster_rounding)
 
-mod <- cmdstan_model(
-  stan_file = "estimation/stan/gp_model.stan",
-  stanc_options = list("O1")
-)
 
 # Calculate model dimensions
-NTimePoints <- max(index_date$ix_date_aggregate)
-NWeeks <- max(index_date$ix_week_aggregate)
-NGroups <- 6  # Number of parties
-NSurveys <- nrow(input_data)
+n_layer1 <- max(index_date$layer1_aggregate_idx)
+n_layer2 <- max(index_date$layer2_aggregate_idx)
+n_layer3 <- max(index_date$layer3_aggregate_idx)
+n_parties <- 6  # Number of parties
+n_surveys <- nrow(input_data)
 
 # Extract indices
-ix_week <- index_date_aggregate$ix_week_aggregate  # From index_date, not input_data
-ix_date <- input_data$ix_date_aggregate
+survey_layer1_idx <- input_data$layer1_aggregate_idx
+trend_layer2_idx <- index_date_aggregate$layer2_aggregate_idx  # From index_date, not input_data
+trend_layer3_idx <- index_date_aggregate$layer3_aggregate_idx  # From index_date, not input_data
+
 
 # Rounding vector
 rounding_error_scale = input_data$rounding
@@ -140,15 +144,17 @@ y <- input_data %>%
 # Create data list for Stan model
 data_list <- list(
   # Dimensions
-  NTimePoints = NTimePoints,
-  NWeeks = NWeeks,
-  NGroups = NGroups,
-  NSurveys = NSurveys,
+  n_layer1 = n_layer1,
+  n_layer2 = n_layer2,
+  n_layer3 = n_layer3,
+  n_parties = n_parties,
+  n_surveys = n_surveys,
   
   # Indices
-  ix_week = ix_week,
-  ix_date = ix_date,
-  
+  survey_layer1_idx = survey_layer1_idx,
+  trend_layer2_idx  = trend_layer2_idx,
+  trend_layer3_idx  = trend_layer3_idx,
+
   # Rounding
   rounding_error_scale = rounding_error_scale,
   
@@ -156,17 +162,23 @@ data_list <- list(
   y = y,
   
   # Prior parameters
-  prior_mu_sigma = 0.2,
-  prior_length_scale = 7,
-  period = NTimePoints,
-  prior_sd_tau_sigma = 0.2,
-  prior_mu_f_sigma = 2,
+  prior_volatility_short_term_mean_mu = 0.2,
+  prior_trend_short_term_length_scale_mean = 0,
+  prior_volatility_short_term_sigma = 0.2,
+  prior_trend_short_term_mean_sigma = 2,
+  prior_trend_mean_sigma = 4,
   
   # Model parameters
-  chosen_length_scale_sigma = 7,
+  volatility_short_term_length_scale_data = 14,
+  trend_long_term_length_scale_data = 16,
+  
   flag_inference = 1
 )
 
+mod <- cmdstan_model(
+  stan_file = "estimation/stan/gp_model.stan",
+  stanc_options = list("O1")
+)
 # Fit the model
 fit2 <- mod$sample(
   data = data_list,
@@ -188,20 +200,13 @@ plot_party_correlations(fit2, party_names = c("CDU/CSU", "FDP", "GRÜNE", "LINKE
                         n_draws = 10,
                         save_path =  "estimation/plt/prior_posterior/")
 
-plot_length_scale_comparison(fit2, data_list$prior_length_scale)
+plot_length_scale_comparison(fit2, data_list$prior_trend_short_term_length_scale_mean)
 
-plot_vote_share_trends(fit2, input_data, index_date, df)
+plot_vote_share_trends(fit2, 
+                       input_data, 
+                       index_date, 
+                       df, 
+                       election_dates, 
+                       cutoff_date = max(df$date) - 240)
 
-plot_trend_volatility(fit2, index_date)
-
-
-
-
-
-
-
-
-
-
-
-
+plot_trend_volatility(fit2, index_date, election_dates)
