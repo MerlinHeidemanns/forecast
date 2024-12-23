@@ -63,3 +63,50 @@ load_institute_data <- function(institute_name, base_dir = POLL_DATA_DIR) {
     )
 }
 
+
+
+
+################################################################################
+# Data Processing Functions
+################################################################################
+
+#' Process and Save Daily Vote Share Trends
+#'
+#' Takes a fitted model object and processes the trend shares data, 
+#' saving daily vote shares to disk.
+#'
+#' @param fit Fitted model object containing posterior draws
+#' @param index_date Data frame mapping indices to dates
+#' @param save_path Directory path for saving data (default: "estimation/data/trends/")
+#' @param filename Name of output file (default: "daily_vote_shares.csv")
+#' @return Processed trend data frame (invisibly)
+save_daily_vote_shares <- function(fit, 
+                                   index_date, 
+                                   save_path = "estimation/data/trends/",
+                                   filename = "daily_vote_shares.csv") {
+  
+  # Create directory if it doesn't exist
+  dir.create(save_path, recursive = TRUE, showWarnings = FALSE)
+  
+  # Process trend data
+  trend_data <- fit$summary("trend_shares", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
+    mutate(
+      layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
+      ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
+      party = factor(
+        c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")[ix_party],
+        levels = c("CDU/CSU", "SPD", "GRÜNE", "FDP", "LINKE", "Sonstige")
+      )
+    ) %>%
+    right_join(index_date %>% 
+                 select(date, layer1_aggregate_idx))
+  
+  # Save to disk
+  write_csv(
+    trend_data,
+    file.path(save_path, filename)
+  )
+  
+  # Return processed data invisibly
+  invisible(trend_data)
+}

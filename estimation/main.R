@@ -222,3 +222,15 @@ plot_vote_share_trends(fit2,
 plot_trend_volatility(fit2, index_date, election_dates)
 
 
+
+save_daily_vote_shares(fit2,
+                       index_date = index_date,
+                       save_path = "web/public/estimated_trends/",
+                       filename = "daily_vote_shares.csv")
+
+The
+
+
+
+
+

@@ -203,7 +203,7 @@ compare_vote_shares <- function(fit, data_list, party_names = c("CDU/CSU", "FDP"
     ) +
     # Customize labels and theme
     labs(
-      y = "Mean vote share (mu_f)"
+      y = "Mean vote share"
     ) + 
     theme_light() +
     theme(
