@@ -27,11 +27,24 @@ detect_rounding <- function(numbers) {
     return(NA)  # If no consistent rounding interval is found
   }
 }
-# --- Data Loading Functions ---
-#' Load polling data from an institute
-#' @param institute_path Path to institute's data directory
-#' @return Dataframe of polling data
+################################################################################
+# Data Loading Functions
+################################################################################
+
+#' Load and standardize polling data from an institute
+#' @param institute_name Name of the polling institute
+#' @param base_dir Base directory for polling data (defaults to POLL_DATA_DIR)
+#' @return Dataframe of standardized polling data with:
+#'   - Consistent party names (e.g., various left party names mapped to "LINKE")
+#'   - Respondent counts as character
+#'   - Added pollster column
 load_institute_data <- function(institute_name, base_dir = POLL_DATA_DIR) {
+  ## Party Name Mappings
+  LEFT_PARTY_NAMES <- c(
+    "LinkePDS" = "LINKE",
+    "LINKE"    = "LINKE",
+    "PDS"      = "LINKE"
+  )
   # Construct full path to institute directory
   institute_path <- file.path(base_dir, institute_name)
   
@@ -44,6 +57,9 @@ load_institute_data <- function(institute_name, base_dir = POLL_DATA_DIR) {
           mutate(Befragte = as.character(Befragte)))
   ) %>%
     mutate(
-      pollster = institute_name
+      pollster = institute_name,
+      # Standardize party names
+      party = if_else(party %in% names(LEFT_PARTY_NAMES), "LINKE", party)
     )
 }
+

@@ -163,6 +163,18 @@ vector gp_periodic_exp_quad_cov_rfft(int n, real sigma, real length_scale, real 
     return n * sigma ^ 2 * length_scale / period * sqrt(2 * pi())
         * exp(-2 * (pi() * linspaced_vector(nrfft, 0, nrfft - 1) * length_scale / period) ^ 2);
 }
+vector gp_sum_exp_quad_cov_rfft(int n, real sigma1, real sigma2, real length_scale1, real length_scale2, real period) {
+    int nrfft = n %/% 2 + 1;
+    vector[nrfft] freqs = linspaced_vector(nrfft, 0, nrfft - 1);
+    
+    return n * (
+        sigma1^2 * length_scale1 / period * sqrt(2 * pi()) 
+            * exp(-2 * (pi() * freqs * length_scale1 / period)^2) +
+        sigma2^2 * length_scale2 / period * sqrt(2 * pi()) 
+            * exp(-2 * (pi() * freqs * length_scale2 / period)^2)
+    );
+}
+
 
 /**
 Evaluate the real fast Fourier transform of the periodic Matern kernel.

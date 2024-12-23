@@ -1,32 +1,41 @@
-## Set working directory
+################################################################################
+# Setup and Configuration
+################################################################################
+
+## Working Directory
 setwd("/Users/merlinheidemanns/projects/forecast")
-## Load libraries
+
+## Load Required Libraries
 library(tidyverse)
 library(cmdstanr)
 library(lubridate)
 
-#' Directory and File Management Constants
+## Source Custom Functions
+source("estimation/utils.R")
+source("estimation/plotting.R")
+
+################################################################################
+# Data Import
+################################################################################
+
+## Load Reference Data
+election_dates <- read_csv("estimation/dta/reference/election_dates.csv")
+
+################################################################################
+# Global Constants
+################################################################################
+
+## Directory Paths
 POLL_DATA_DIR <- "web/public/polling_data/"
 
+## Time Period Constants
+LAYER1_PERIOD <- "7 days"     # Weekly
+LAYER2_PERIOD <- "14 days"    # Bi-weekly
+LAYER3_PERIOD <- "quarter"    # Quarterly
 
-# Define the time period for grouping (can be adjusted)
-LAYER1_PERIOD <- "7 days"
-LAYER2_PERIOD <- "14 days"  # Twice the daily rate
-LAYER3_PERIOD <- "quarter"
 
-LEFT_PARTY_NAMES <- c(
-  "LinkePDS" = "LINKE",
-  "LINKE" = "LINKE",
-  "PDS" = "LINKE"
-)
 
 df = load_institute_data("Allensbach", POLL_DATA_DIR)
-
-# Apply party name standardization
-df <- df %>%
-  mutate(
-    party = if_else(party %in% names(LEFT_PARTY_NAMES), "LINKE", party)
-  )
 
 # Initial data transformation
 df <- df %>%
@@ -176,9 +185,10 @@ data_list <- list(
 )
 
 mod <- cmdstan_model(
-  stan_file = "estimation/stan/gp_model.stan",
+  stan_file = "estimation/stan/gp_model_sum.stan",
   stanc_options = list("O1")
 )
+
 # Fit the model
 fit2 <- mod$sample(
   data = data_list,
@@ -210,3 +220,5 @@ plot_vote_share_trends(fit2,
                        cutoff_date = max(df$date) - 240)
 
 plot_trend_volatility(fit2, index_date, election_dates)
+
+
