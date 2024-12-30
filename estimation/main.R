@@ -9,6 +9,7 @@ setwd("/Users/merlinheidemanns/projects/forecast")
 library(tidyverse)
 library(cmdstanr)
 library(lubridate)
+library(ggthemes)
 
 ## Source Custom Functions
 source("estimation/utils.R")
@@ -19,7 +20,8 @@ source("estimation/plotting.R")
 ################################################################################
 
 ## Load Reference Data
-election_dates <- read_csv("estimation/dta/reference/election_dates.csv")
+election_results = read_csv("estimation/dta/processed/germany_federal_elections_wide.csv")
+election_dates = read_csv("estimation/dta/reference/election_dates.csv")
 
 ################################################################################
 # Global Constants
@@ -33,7 +35,24 @@ LAYER1_PERIOD <- "7 days"     # Weekly
 LAYER2_PERIOD <- "14 days"    # Bi-weekly
 LAYER3_PERIOD <- "quarter"    # Quarterly
 
+START_DATE = as.Date("1998-01-01")
+END_DATE = as.Date("2005-09-27")
 
+################################################################################
+# Date Transformation
+################################################################################
+
+## Election data
+df_elections = election_results %>%
+  filter(
+    election_date > START_DATE,
+    election_date < END_DATE
+  ) %>%
+  arrange(election_date) %>%
+  mutate(election_idx = 1:n())
+
+
+## Polling data
 
 df = load_institute_data("Allensbach", POLL_DATA_DIR)
 
@@ -56,11 +75,17 @@ df <- df %>%
   ) %>%
   # Filter and select relevant columns
   filter(
-    date < as.Date("2008-01-01"),
+    date <   END_DATE,
+    date > START_DATE,
     !is.na(vote_share)
   ) %>%
   select(uuid, date, layer1_aggregate,
-         survey_count, party, pollster, vote_share)
+         survey_count, party, pollster, vote_share) %>%
+  cross_join(df_elections %>%
+               select(election_date, election_idx)) %>%
+  group_by(uuid) %>%
+  filter((election_date - date) > 0) %>%
+  filter(election_date - date == min(election_date - date))
 
 # Create party index
 index_party <- data.frame(
@@ -76,7 +101,7 @@ index_pollster <- data.frame(
 
 # Create date index with adjusted periods
 index_date <- data.frame(
-  date = seq(min(df$date), max(df$date), by = 1)
+  date = seq(START_DATE, END_DATE, by = 1)
 ) %>%
   mutate(
     layer1_aggregate = floor_date(date, unit = LAYER1_PERIOD),
@@ -111,12 +136,13 @@ df_pollster_rounding = lapply(index_pollster$pollster, function(i){
 
 
 # Transform input data
+max_date = max(df$date)
 input_data <- df %>%
-  filter(date < max(date) - 240) %>%
+  filter(date < (max_date - 120)) %>%
   mutate(y = floor(vote_share / 100 * survey_count)) %>%
   select(-vote_share) %>%
   pivot_wider(
-    id_cols = c(uuid, date, survey_count, pollster),
+    id_cols = c(uuid, date, election_idx, survey_count, pollster),
     names_from = party,
     values_from = y
   ) %>%
@@ -126,8 +152,13 @@ input_data <- df %>%
   ) %>%
   select(-REP) %>%
   filter(!is.na(Sonstige)) %>%
-  left_join(df_pollster_rounding)
+  left_join(df_pollster_rounding) %>%
+  ungroup()
 
+# Transform election data
+df_elections = df_elections %>%
+  left_join(index_date,
+            by = c("election_date" = "date"))
 
 # Calculate model dimensions
 n_layer1 <- max(index_date$layer1_aggregate_idx)
@@ -140,15 +171,25 @@ n_surveys <- nrow(input_data)
 survey_layer1_idx <- input_data$layer1_aggregate_idx
 trend_layer2_idx <- index_date_aggregate$layer2_aggregate_idx  # From index_date, not input_data
 trend_layer3_idx <- index_date_aggregate$layer3_aggregate_idx  # From index_date, not input_data
-
+survey_election_idx <- input_data$election_idx
 
 # Rounding vector
 rounding_error_scale = input_data$rounding
 
 # Create response matrix
-y <- input_data %>%
+survey_y <- input_data %>%
   select(all_of(c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD"))) %>%
   as.matrix()
+
+# elections
+n_elections = df_elections %>% nrow
+election_layer1_idx = df_elections$layer1_aggregate_idx
+election_y = df_elections %>%
+  select(all_of(c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")))
+
+# spline
+n_knots <- 5
+spline_basis <- bs(1:n_layer1, df = n_knots, degree = 3, intercept = TRUE)
 
 # Create data list for Stan model
 data_list <- list(
@@ -161,6 +202,7 @@ data_list <- list(
   
   # Indices
   survey_layer1_idx = survey_layer1_idx,
+  survey_election_idx = survey_election_idx,
   trend_layer2_idx  = trend_layer2_idx,
   trend_layer3_idx  = trend_layer3_idx,
 
@@ -168,14 +210,28 @@ data_list <- list(
   rounding_error_scale = rounding_error_scale,
   
   # Response data
-  y = y,
+  survey_y = survey_y,
+  
+  # Dimensions elections
+  n_elections = n_elections,
+  
+  # Indices elections
+  election_layer1_idx = election_layer1_idx,
+  
+  # Election data
+  election_y = election_y,
   
   # Prior parameters
   prior_volatility_short_term_mean_mu = 0.2,
   prior_trend_short_term_length_scale_mean = 0,
   prior_volatility_short_term_sigma = 0.2,
   prior_trend_short_term_mean_sigma = 2,
-  prior_trend_mean_sigma = 4,
+  prior_trend_mean_sigma = 20,
+  prior_spline_2nd_diff_scale = 1,
+  
+  # Splints
+  n_knots = n_knots,
+  spline_basis = spline_basis,
   
   # Model parameters
   volatility_short_term_length_scale_data = 14,
@@ -185,12 +241,12 @@ data_list <- list(
 )
 
 mod <- cmdstan_model(
-  stan_file = "estimation/stan/gp_model_sum.stan",
+  stan_file = "estimation/stan/gp_model.stan",
   stanc_options = list("O1")
 )
 
 # Fit the model
-fit2 <- mod$sample(
+fit <- mod$sample(
   data = data_list,
   chains = 4,
   parallel_chains = 4,
@@ -199,38 +255,49 @@ fit2 <- mod$sample(
 )
 
 
+################################################################################
+# Model Evaluation and Visualization
+################################################################################
 
-create_vote_share_ppc(fit2, data_list, 100)
+## Posterior Predictive Checks
+create_vote_share_ppc(fit, data_list, 100)
 
-compare_vote_shares(fit2, data_list)
+## Parameter Analysis
+# Compare alpha parameters across parties
+compare_alpha_parameters(fit, 
+                         party_names = c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD"))
 
-compare_alpha_parameters(fit2, party_names = c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD"))
-
-plot_party_correlations(fit2, party_names = c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD"),
+# Analyze party correlations
+plot_party_correlations(fit, 
+                        party_names = c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD"),
                         n_draws = 10,
-                        save_path =  "estimation/plt/prior_posterior/")
+                        save_path = "estimation/plt/prior_posterior/")
 
-plot_length_scale_comparison(fit2, data_list$prior_trend_short_term_length_scale_mean)
+# Compare length scales
+plot_length_scale_comparison(fit, 
+                             data_list$prior_trend_short_term_length_scale_mean)
 
-plot_vote_share_trends(fit2, 
+################################################################################
+# Trend Analysis and Results Export
+################################################################################
+
+## Visualize Trends
+# Plot main vote share trends
+plot_vote_share_trends(fit, 
                        input_data, 
                        index_date, 
                        df, 
                        election_dates, 
-                       cutoff_date = max(df$date) - 240)
+                       cutoff_date = max(df$date) - 120)
 
-plot_trend_volatility(fit2, index_date, election_dates)
+# Plot trend volatility
+plot_trend_volatility(fit, index_date, election_dates)
 
-
-
-save_daily_vote_shares(fit2,
+## Export Results
+# Save daily vote share estimates
+save_daily_vote_shares(fit,
                        index_date = index_date,
                        save_path = "web/public/estimated_trends/",
                        filename = "daily_vote_shares.csv")
-
-The
-
-
-
 
 

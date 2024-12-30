@@ -36,11 +36,11 @@ library(ggthemes)
 #'   - y_rep_transformed: Transformed posterior predictions
 create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
   # Extract posterior predictive draws
-  y_rep <- fit$draws("y_rep") %>%
+  survey_y_rep <- fit$draws("survey_y_rep") %>%
     posterior::as_draws_matrix()
   
   # Transform observed data to long format with vote shares
-  y_long <- data_list$y %>%
+  survey_y_long <- data_list$survey_y %>%
     as.data.frame() %>%
     mutate(i = 1:n()) %>%
     pivot_longer(
@@ -54,8 +54,8 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
     )
   
   # Helper function to transform y_rep into vote shares
-  transform_y_rep <- function(y_rep) {
-    y_rep %>%
+  transform_survey_y_rep <- function(survey_y_rep) {
+    survey_y_rep %>%
       as.data.frame() %>%
       mutate(
         draw = 1:n()
@@ -80,12 +80,12 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
   }
   
   # Transform y_rep
-  y_rep_transformed <- transform_y_rep(y_rep)
+  survey_y_rep_transformed <- transform_survey_y_rep(survey_y_rep)
   
   # Create plot
   plt_dens <- bayesplot::ppc_dens_overlay(
-    y_long$vote_share, 
-    y_rep_transformed[sample(1:nrow(y_rep_transformed),n_draws),]
+    survey_y_long$vote_share, 
+    survey_y_rep_transformed[sample(1:nrow(survey_y_rep_transformed),n_draws),]
   ) + 
     labs(
       title = "Posterior Predictive Check (density): Vote Shares",
@@ -97,8 +97,8 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
          plt_dens, 
          width = 7, height = 7)
   
-  plt_hist = bayesplot::ppc_hist(y_long$vote_share, 
-                                 y_rep_transformed[sample(1:nrow(y_rep_transformed),11),]) + 
+  plt_hist = bayesplot::ppc_hist(survey_y_long$vote_share, 
+                                 survey_y_rep_transformed[sample(1:nrow(survey_y_rep_transformed),11),]) + 
     labs(
       title = "Posterior Predictive Check (histogram): Vote Shares",
       x = "Vote Share",
@@ -113,8 +113,8 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
   return(list(
     plot_dens = plt_dens,
     plot_hist = plt_hist,
-    y_long = y_long,
-    y_rep_transformed = y_rep_transformed
+    survey_y_long = survey_y_long,
+    survey_y_rep_transformed = survey_y_rep_transformed
   ))
 }
 
@@ -122,106 +122,6 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
 ################################################################################
 # Prior-Posterior Comparison Plots
 ################################################################################
-
-#' Compare Prior and Posterior Vote Share Distributions
-#'
-#' Creates a comparison plot showing prior and posterior distributions of vote shares
-#' across different political parties.
-#'
-#' @param fit Fitted model object containing draws
-#' @param data_list Data list containing prior parameters
-#' @param party_names Vector of party names (default: German parties)
-#' @return ggplot object showing prior-posterior comparisons
-compare_vote_shares <- function(fit, data_list, party_names = c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")) {
-  #' Create a comparison plot of prior and posterior vote share distributions
-  #' 
-  #' @param fit The fitted model object containing draws
-  #' @param data_list Data list containing prior parameters
-  #' @param party_names Vector of party names in order (default German parties)
-  #' @return A ggplot object showing prior and posterior comparisons
-  
-  # Extract posterior draws for trend_mean and convert to data frame
-  posterior_draws <- fit$draws("trend_mean") %>%
-    posterior::as_draws_df() %>%
-    # Add reference category (trend_mean[0] = 0) and draw number
-    mutate(`trend_mean[0]` = 0,
-           draw = 1:n()) %>%
-    # Remove unnecessary columns (those containing ".")
-    select(!contains(".")) %>%
-    # Convert to long format
-    pivot_longer(
-      cols = c(-draw),
-      values_to = "val",
-      names_to = "var"
-    )
-  
-  # Combine posterior and prior distributions
-  combined_distributions <- bind_rows(
-    # Posterior distribution
-    posterior_draws %>%
-      mutate(kind = "Posterior"),
-    # Prior distribution - simulate from normal distribution
-    posterior_draws %>%
-      mutate(
-        kind = "Prior",
-        val = rnorm(n(), 0, data_list$prior_trend_mean_sigma),
-        # Ensure reference category remains 0
-        val = ifelse(var == "trend_mean[0]", 0, val)
-      )
-  ) %>%
-    # Calculate exponential means within each draw
-    group_by(draw, kind) %>%
-    mutate(
-      exp_mu = exp(val) / sum(exp(val))
-    ) %>%
-    # Add party information
-    mutate(
-      # Extract party index from variable name and add 1 (0-based to 1-based)
-      ix_party = 1 + as.integer(str_match(var, "(\\d+)")[, 2]),
-      # Map indices to party names
-      party = party_names[ix_party]
-    )
-  
-  # Calculate summary statistics and create plot
-  plot <- combined_distributions %>%
-    # Calculate quantiles for each party and distribution type
-    group_by(party, kind) %>%
-    summarize(
-      q50 = quantile(exp_mu, 0.5),  # median
-      q25 = quantile(exp_mu, 0.25), # lower quartile
-      q75 = quantile(exp_mu, 0.75)  # upper quartile
-    ) %>%
-    # Create the visualization
-    ggplot(aes(x = party, y = q50, color = kind)) + 
-    # Add points for medians
-    geom_point(position = position_dodge(width = 0.5)) +
-    # Add error bars for quartiles
-    geom_errorbar(
-      aes(ymin = q25, ymax = q75), 
-      width = 0, 
-      position = position_dodge(width = 0.5)
-    ) +
-    # Customize labels and theme
-    labs(
-      y = "Mean vote share"
-    ) + 
-    theme_light() +
-    theme(
-      axis.title.x = element_blank(),
-      legend.title = element_blank(),
-      legend.position = "bottom"
-    ) +
-    ggthemes::scale_color_colorblind()
-  
-  ggsave(
-    filename = "estimation/plt/prior_posterior/plot_baseline_logits.png",
-    plot = plot,
-    width = 7,
-    height = 7
-  )
-  
-  return(plot)
-}
 
 
 #' Compare Prior and Posterior Alpha Parameters
@@ -340,7 +240,7 @@ plot_length_scale_comparison <- function(fit, prior_mean, prior_sd = 10,
   dir.create(save_path, recursive = TRUE, showWarnings = FALSE)
   
   # Extract posterior draws and prepare for plotting
-  posterior_draws <- fit$draws("trend_short_term_length_scale") %>%
+  posterior_draws <- fit$draws("trend_length_scale") %>%
     posterior::as_draws_df() %>%
     select(!contains(".")) %>%
     pivot_longer(
@@ -351,10 +251,17 @@ plot_length_scale_comparison <- function(fit, prior_mean, prior_sd = 10,
     mutate(distribution = "Posterior")
   
   # Generate prior draws
-  prior_draws <- data.frame(
-    value = abs(rnorm(nrow(posterior_draws), prior_mean, prior_sd)),
-    distribution = "Prior",
-    parameter = "trend_short_term_length_scale"
+  prior_draws <- bind_rows(
+    data.frame(
+      value = abs(rnorm(nrow(posterior_draws), 5, 20)),
+      distribution = "Prior",
+      parameter = "trend_length_scale[1]"
+    ),
+    data.frame(
+      value = abs(rnorm(nrow(posterior_draws), 365.0 / 7.0, 10)),
+      distribution = "Prior",
+      parameter = "trend_length_scale[2]"
+    )
   )
   
   # Combine draws and ensure factor ordering
@@ -363,7 +270,7 @@ plot_length_scale_comparison <- function(fit, prior_mean, prior_sd = 10,
   
   # Calculate summary statistics for annotations
   medians <- all_draws %>%
-    group_by(distribution) %>%
+    group_by(distribution, parameter) %>%
     summarize(
       median = median(value),
       mad = mad(value)
@@ -371,6 +278,7 @@ plot_length_scale_comparison <- function(fit, prior_mean, prior_sd = 10,
   
   # Create visualization
   plot <- ggplot(all_draws, aes(x = value, fill = distribution)) +
+    facet_grid(parameter ~ .) +
     # Add histograms with transparency
     geom_histogram(
       position = "identity",
@@ -450,7 +358,7 @@ plot_party_correlations <- function(fit, party_names, n_draws = 25,
   dir.create(save_path, recursive = TRUE, showWarnings = FALSE)
   
   # Common data preparation
-  omega_draws <- fit$draws("Omega") %>%
+  omega_draws <- fit$draws("trend_party_correlation") %>%
     posterior::as_draws_df() %>%
     select(!contains("."))
   
@@ -462,8 +370,8 @@ plot_party_correlations <- function(fit, party_names, n_draws = 25,
       values_to = "correlation"
     ) %>%
     mutate(
-      row = as.integer(str_match(pair, "Omega\\[(\\d+),(\\d+)\\]")[,2]),
-      col = as.integer(str_match(pair, "Omega\\[(\\d+),(\\d+)\\]")[,3]),
+      row = as.integer(str_match(pair, "trend_party_correlation\\[(\\d+),(\\d+)\\]")[,2]),
+      col = as.integer(str_match(pair, "trend_party_correlation\\[(\\d+),(\\d+)\\]")[,3]),
       party_row = factor(party_names[row + 1], levels = party_names),
       party_col = factor(party_names[col + 1], levels = party_names)
     )
@@ -588,24 +496,24 @@ plot_party_correlations <- function(fit, party_names, n_draws = 25,
   ))
 }
 
+
 #' Plot Party Vote Share Trends Over Time
 #'
-#' Creates a visualization of predicted vote shares over time for each party,
-#' including uncertainty bands and observed data points. Uses traditional German
-#' party colors for visualization.
+#' Creates visualizations of predicted vote shares over time for each party,
+#' including overall trends, long-term trends, and short-term trends.
+#' Uses traditional German party colors for visualization.
 #'
 #' @param fit Fitted model object containing posterior draws
 #' @param input_data Data frame containing dates and index mapping
 #' @param df Original data frame with observed vote shares
 #' @param save_path Directory path for saving plots (default: "estimation/plt/trends/")
-#' @return ggplot object showing temporal trends with uncertainty bands
+#' @return List of ggplot objects showing temporal trends with uncertainty bands
 plot_vote_share_trends <- function(fit, input_data, 
                                    index_date,
                                    df, 
                                    election_dates, 
                                    cutoff_date,
-                                   save_path = "estimation/plt/trends/"
-                                   ) {
+                                   save_path = "estimation/plt/trends/") {
   
   # Traditional German party colors
   party_colors <- c(
@@ -617,28 +525,31 @@ plot_vote_share_trends <- function(fit, input_data,
     "Sonstige" = "#A4A4A4"  # Grey
   )
   
-  # Prepare trend data
-  trend_data <- fit$summary("trend_shares", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
-    mutate(
-      layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
-      ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
-      party = factor(
-        c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")[ix_party],
-        levels = names(party_colors)
+  # Helper function to prepare trend data
+  prepare_trend_data <- function(trend_var) {
+    fit$summary(trend_var, ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
+      mutate(
+        layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
+        ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
+        party = factor(
+          c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")[ix_party],
+          levels = names(party_colors)
+        )
+      ) %>%
+      right_join(index_date %>% 
+                   select(date, layer1_aggregate_idx))
+  }
+  
+  # Helper function to filter relevant election dates
+  get_relevant_elections <- function(trend_data) {
+    election_dates %>%
+      filter(
+        date >= min(trend_data$date),
+        date <= max(trend_data$date)
       )
-    ) %>%
-    right_join(index_date %>% 
-                select(date, layer1_aggregate_idx))
+  }
   
-  
-  # Filter election dates to those within data range
-  relevant_elections <- election_dates %>%
-    filter(
-      date >= min(trend_data$date),
-      date <= max(trend_data$date)
-    )
-
-  # Prepare observed data
+  # Prepare observed data (shared across all plots)
   observed_data <- df %>% 
     mutate(party = ifelse(party == "REP", "Sonstige", party)) %>%
     group_by(uuid, party, date) %>%
@@ -646,123 +557,192 @@ plot_vote_share_trends <- function(fit, input_data,
     ungroup() %>%
     mutate(vote_share = vote_share / 100)
   
-  # Create plot
-  plot <- ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
-    # Add uncertainty bands
-    geom_ribbon(
-      aes(ymin = `2.5%`, ymax = `97.5%`),
-      alpha = 0.125,
-      color = NA
-    ) +
-    geom_ribbon(
-      aes(ymin = `25%`, ymax = `75%`),
-      alpha = 0.25,
-      color = NA
-    ) +
-    # Add trend lines and observed points
-    geom_line(linewidth = 1) +
-    geom_point(
-      data = observed_data,
-      aes(y = vote_share),
-      size = 2
-    ) +
-    # Customize appearance
-    scale_color_manual(values = party_colors) +
-    scale_fill_manual(values = party_colors) +
-    scale_y_continuous(
-      labels = scales::percent_format(accuracy = 1),
-      limits = c(0, 0.5)
-    ) +
-    theme_light() +
-    theme(
-      legend.position = "bottom",
-      legend.title = element_blank(),
-      panel.grid.minor = element_blank(),
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      axis.title.x = element_blank()  # Remove x-axis label
-    ) +
-    # Add 5% electoral threshold line
-    geom_hline(
-      yintercept = 0.05,
-      linetype = "dashed",
-      color = "black",
-      alpha = 0.5
-    ) +
-    # Add threshold annotation
-    annotate(
-      "label",
-      x = min(trend_data$date, na.rm = TRUE),
-      y = 0.05,
-      label = "5% electoral threshold",
-      hjust = 0,
-      size = 3,
-      fill = "white",
-      alpha = 0.8,
-      #label.padding = unit(0.5, "lines"),
-      label.r = unit(0.15, "lines")  # Controls corner rounding
-    ) +
-    # Add labels
-    labs(
-      title = "Predicted Vote Shares Over Time",
-      subtitle = "Lines show median predictions with 50% and 95% credible intervals",
-      x = "Date",
-      y = "Vote Share",
-      caption = "Points show observed data. Bands show 50% (darker) and 95% (lighter) credible intervals."
-    ) +
-    # Add election date markers
-    geom_vline(
-      data = relevant_elections,
-      aes(xintercept = date),
-      linetype = "dashed",
-      color = "darkred",
-      alpha = 0.5
-    ) +
-    # Add election date labels
-    geom_text(
-      data = relevant_elections,
-      aes(
-        x = date,
-        y = max(trend_data$`97.5%`),
-        label = format(date, "%b %Y")
-      ),
-      angle = 90,
-      hjust = 0.25,
-      vjust = -0.5,
-      size = 3,
-      color = "darkred",
-      inherit.aes = FALSE
-    ) +
-    geom_vline(
-      data = data.frame(date = cutoff_date),
-      aes(xintercept = date),
-      linetype = "twodash",
-      alpha = 0.75
-    ) +
-    geom_text(
-      data = data.frame(date = cutoff_date),
-      aes(
-        x = date,
-        y = max(trend_data$`97.5%`),
-        label = "Data cutoff"
-      ),
-      angle = 90,
-      hjust = 0.25,
-      vjust = -0.5,
-      size = 3,
-      inherit.aes = FALSE
-    )
-
+  # Helper function to create trend plot
+  create_trend_plot <- function(trend_data, title_prefix, trend_description, trend_var) {
+    relevant_elections <- get_relevant_elections(trend_data)
+    
+    # Define legend settings based on plot type
+    legend_settings <- if (grepl("short_term", trend_var)) {
+      theme(legend.position = "none")
+    } else {
+      theme(
+        legend.position = "bottom",
+        legend.title = element_blank()
+      )
+    }
+    
+    ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
+      # Add uncertainty bands
+      geom_ribbon(
+        aes(ymin = `2.5%`, ymax = `97.5%`),
+        alpha = 0.125,
+        color = NA
+      ) +
+      geom_ribbon(
+        aes(ymin = `25%`, ymax = `75%`),
+        alpha = 0.25,
+        color = NA
+      ) +
+      # Add trend lines and observed points (if applicable)
+      geom_line(linewidth = 1) +
+      {if (!grepl("short_term", trend_var)) 
+        geom_point(
+          data = observed_data,
+          aes(y = vote_share),
+          size = 2
+        )
+      } +
+      # Customize appearance
+      scale_color_manual(values = party_colors) +
+      scale_fill_manual(values = party_colors) +
+      {if (grepl("short_term", trend_var)) {
+        facet_wrap(~party, ncol = 2)
+      }} + 
+      {if (grepl("short_term", trend_var)) {
+        scale_y_continuous(
+          labels = scales::percent_format(accuracy = 1),
+          name = "Percentage Difference from Long-term Average",
+          # Let the limits be determined by the data
+          expand = expansion(mult = 0.05)
+        )
+      } else {
+        scale_y_continuous(
+          labels = scales::percent_format(accuracy = 1),
+          limits = c(0, 0.5),
+          name = "Vote Share"
+        )
+      }} +
+      theme_light() +
+      theme(
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank()
+      ) +
+      legend_settings +
+      # Add 5% threshold line and annotation for non-short-term plots
+      {if (!grepl("short_term", trend_var)) {
+        list(
+          geom_hline(
+            yintercept = 0.05,
+            linetype = "dashed",
+            color = "black",
+            alpha = 0.5
+          ),
+          annotate(
+            "label",
+            x = min(trend_data$date, na.rm = TRUE),
+            y = 0.05,
+            label = "5% electoral threshold",
+            hjust = 0,
+            size = 3,
+            fill = "white",
+            alpha = 0.8,
+            label.r = unit(0.15, "lines")
+          )
+        )
+      }} +
+      # Add labels
+      labs(
+        title = paste0(title_prefix, " Vote Shares Over Time"),
+        subtitle = paste0(trend_description, "\nLines show median predictions with 50% and 95% credible intervals"),
+        x = "Date",
+        y = "Vote Share",
+        caption = "Points show observed data. Bands show 50% (darker) and 95% (lighter) credible intervals."
+      ) +
+      # Add election date markers and labels
+      geom_vline(
+        data = relevant_elections,
+        aes(xintercept = date),
+        linetype = "dashed",
+        color = "darkred",
+        alpha = 0.5
+      ) +
+      geom_text(
+        data = relevant_elections,
+        aes(
+          x = date,
+          y = max(trend_data$`97.5%`) -0.01,
+          label = format(date, "%b %Y")
+        ),
+        angle = 90,
+        hjust = 0.25,
+        vjust = -0.45,
+        size = 3,
+        color = "darkred",
+        inherit.aes = FALSE
+      ) +
+      # Add cutoff date marker and label
+      geom_vline(
+        data = data.frame(date = cutoff_date),
+        aes(xintercept = date),
+        linetype = "twodash",
+        alpha = 0.75
+      ) +
+      geom_text(
+        data = data.frame(date = cutoff_date),
+        aes(
+          x = date,
+          y = max(trend_data$`97.5%`) -0.01,
+          label = "Data cutoff"
+        ),
+        angle = 90,
+        hjust = 0.25,
+        vjust = -0.45,
+        size = 3,
+        inherit.aes = FALSE
+      )
+  }
   
-  # Save plot
-  ggsave(
-    filename = file.path(save_path, "vote_share_trends.png"),
-    plot = plot,
-    width = 12,
-    height = 8,
-    dpi = 300
+  # Define trend components
+  trend_components <- list(
+    list(
+      var = "trend_shares",
+      prefix = "Overall",
+      desc = "Combined long-term and short-term trends",
+      filename = "overall_trend.png"
+    ),
+    list(
+      var = "trend_long_term_shares",
+      prefix = "Long-term",
+      desc = "Underlying long-term trends excluding short-term fluctuations",
+      filename = "long_term_trend.png"
+    ),
+    list(
+      var = "trend_short_term_shares",
+      prefix = "Short-term",
+      desc = "Short-term fluctuations in voting intentions",
+      filename = "short_term_trend.png"
+    )
   )
   
-  return(plot)
+  # Create and save all plots
+  plots <- list()
+  
+  for (component in trend_components) {
+    # Prepare trend data
+    trend_data <- prepare_trend_data(component$var)
+    
+    # Create plot
+    plot <- create_trend_plot(
+      trend_data = trend_data,
+      title_prefix = component$prefix,
+      trend_description = component$desc,
+      trend_var = component$var
+    )
+    
+    # Save plot
+    ggsave(
+      filename = file.path(save_path, component$filename),
+      plot = plot,
+      width = 12,
+      height = 8,
+      dpi = 300
+    )
+    
+    plots[[component$var]] <- plot
+  }
+  
+  return(plots)
 }
 
 #' Plot Trend Volatility Over Time
