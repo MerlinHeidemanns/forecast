@@ -1,0 +1,3 @@
+name: "Polling Analysis Documentation"
+output_dir: _site
+exclude: [assets]

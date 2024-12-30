@@ -17,6 +17,10 @@
       "dest": "/public/forecasts.html"
     },
     {
+      "src": "/docs/(.*)",
+      "dest": "/public/docs/$1"
+    },
+    {
       "src": "/(.*)",
       "dest": "/public/$1"
     }

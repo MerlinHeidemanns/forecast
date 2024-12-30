@@ -1,0 +1,8 @@
+---
+title: "Documentation"
+output: html_document
+---
+
+## Technical Documentation
+
+- [Variable Guide](technical/variable-guide.html)

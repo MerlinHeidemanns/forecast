@@ -1,0 +1,41 @@
+---
+title: "Adjustment terms"
+output:
+  html_document:
+    css: ["../assets/css/styles.css"]
+    includes:
+      in_header: "_includes/header.html"
+      before_body: "_includes/nav.html"
+---
+
+## Adjustment terms
+
+By adjustment terms, I am referring to ``fixed effects'' at the poll-level indicating their deviation from the overall average.
+Common examples are pollster or polling houses, mode, sampled population or whether a given poll was sponsored by a political party.
+For example, @heidemanns2020 and @gelman2024 adjust for pollster, mode, and sampled population.
+
+### Purpose
+The intention of including such terms is to account for some of the variation between polls as a result of variation between factors specific to those polls, e.g.
+some polls where conducted online and others in person. For example, if we know that polls of type X are always 2 percentage points higher for candidate A, then we can
+subtract 2 percentage points from the polls of type X to get an unbiased estimate of the true support for candidate A.
+
+### Limitations
+
+Let there be a true population parameter $\alpha$. We observe an estimate $\bar{y}_{i}$ with standard error $\hat{\tau_i}$ with expectation $\alpha + \beta_{k[i]}$. That is
+we are measuring $\alpha$ with bias $\beta_{i[k]}$. We assert that $\sum_{k = 1}^K \beta_k = 0$ to be able to identify the parameters. Otherwise, we are fitting $K$ values (one per factor) with $K + 1$ parameters (K factors and one overall mean).
+
+If there is one mean response for example because there is one state, we are estimating the following
+
+$$
+\delta_i = \alpha + \beta_{i[k]}\\
+\hat{\delta}_i \sim \mbox{N}(\delta_i, \hat{\tau}_i)
+$$
+
+We are estimating $\alpha$ and $\beta$ with bias $-\bar{\beta}$ and $\bar{\beta}$ respectively where $\bar{\beta} = \sum_{k = 1}^K \delta_k$.
+
+When $\alpha$ is a vector of length $S$ where $S$ may represent the number of states there has to be overlap in the units that are surveyed by the different factors, e.g.
+for two states and four factors, factors 1 through 3 can survey state 1 and 3 through 4 state 2, but we cannot have complete separation such that factors 1 and 2 survey state 1 and 3 and 4 survey state 2 as in that case the parameters are again unidentified.
+
+
+
+### What to do about it

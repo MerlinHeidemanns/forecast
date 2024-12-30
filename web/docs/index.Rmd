@@ -1,0 +1,26 @@
+---
+title: "Documentation"
+output:
+  html_document:
+    css: ["../css/styles.css"]
+    includes:
+      before_body: "_includes/nav.html"
+      after_body: "_includes/footer.html"
+    self_contained: true
+    theme: null
+    highlight: null
+    mathjax: null
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Set the working directory to the docs folder
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+This documentation provides a comprehensive overview of our polling analysis system, including variable definitions, model parameters, and implementation details.
+ ''template: _templates/template.html''
+```{r child='docs/_posts/technical/variable-guide.Rmd', echo=FALSE}
+```
+

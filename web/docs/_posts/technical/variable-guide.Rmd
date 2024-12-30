@@ -1,0 +1,17 @@
+---
+title: "Variable Guide"
+output:
+  html_document:
+    css: ["../assets/css/styles.css"]
+    includes:
+      in_header: "_includes/header.html"
+      before_body: "_includes/nav.html"
+---
+
+
+# Data sources
+
+* Germany
+    * Election results: @Heddesheimer2024GermanElection
+
+

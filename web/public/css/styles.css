@@ -1,35 +1,182 @@
+/* Reset and base styles */
+:root {
+    --primary-red: #e3120b;
+    --nav-height: 50px;
+    --content-max-width: 1200px;
+    --sidebar-width: 150px;
+}
+
 body {
-    font-family: Arial, sans-serif;
     margin: 0;
     padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, sans-serif;
     line-height: 1.6;
+    color: #333;
+    background-color: #fff;
+    width: 100%;
+    overflow-x: hidden;
 }
 
-nav {
-    background: #333;
-    padding: 1rem;
+/* Top navigation */
+.top-nav {
+    background-color: white;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 0;
+    margin: 0;
+    width: 100vw;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-nav a {
-    color: white;
+.site-nav {
+    max-width: var(--content-max-width);
+    margin: 0 auto;
+    padding: 1rem 2rem;
+}
+
+.site-nav a {
+    color: #333;
     text-decoration: none;
-    margin-right: 20px;
+    padding: 0.5rem 1rem;
+    margin-right: 1rem;
+    font-weight: 500;
 }
 
-nav a.active {
+.site-nav a:hover {
+    color: var(--primary-red);
+}
+
+.site-nav a.active {
+    color: var(--primary-red);
+    border-bottom: 2px solid var(--primary-red);
+}
+
+/* Standard content layout */
+.standard-content {
+    max-width: var(--content-max-width);
+    margin: calc(var(--nav-height) + 2rem) auto 2rem;
+    padding: 0 2rem;
+}
+
+/* Typography */
+h1 {
+    font-size: 2.5rem;
+    line-height: 1.2;
+    margin-bottom: 1.5rem;
+    font-weight: 700;
+    color: #111;
+}
+
+h2 {
+    font-size: 1.75rem;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    color: #111;
+}
+
+p {
+    margin-bottom: 1.5rem;
+    font-size: 1.125rem;
+    color: #333;
+}
+
+/* Links */
+a {
+    color: var(--primary-red);
+    text-decoration: none;
+}
+
+a:hover {
     text-decoration: underline;
 }
 
-.container {
-    width: 80%;
-    margin: 0 auto;
-    padding: 20px;
+/* Documentation page layout */
+.layout-container {
+    display: flex;
+    min-height: 100vh;
+    padding-top: var(--nav-height);
+    width: 100vw;
+    margin: 0;
+    position: relative;
 }
 
-.tooltip {
-    position: absolute;
-    background: white;
-    border: 1px solid #ddd;
-    padding: 8px;
-    pointer-events: none;
+/* Sidebar styles */
+.sidebar {
+    width: var(--sidebar-width);
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    position: fixed;
+    top: var(--nav-height);
+    bottom: 0;
+    left: 0;
+    overflow-y: auto;
+    border-right: 1px solid #e0e0e0;
+}
+
+.sidebar-section {
+    margin-bottom: 1.5rem;
+}
+
+.sidebar h3 {
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: #333;
+}
+
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.sidebar-nav a {
+    color: #333;
+    text-decoration: none;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    padding: 0.25rem 0;
+}
+
+.sidebar-nav a:hover {
+    color: var(--primary-red);
+}
+
+.sidebar-nav a.active {
+    color: var(--primary-red);
+}
+
+/* Main content area */
+.main-content {
+    flex: 1;
+    margin-left: calc(var(--sidebar-width) + 4.5rem);
+    padding: 0rem 0rem 0rem 0;  /* Removed left padding */
+    max-width: calc(var(--content-max-width) - var(--sidebar-width));
+    background-color: #fff;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .layout-container {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        position: static;
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid #e9ecef;
+        padding: 1.5rem;
+    }
+
+    .main-content {
+        margin-left: 0;
+        padding: 1.5rem;
+        max-width: 100%;
+    }
 }

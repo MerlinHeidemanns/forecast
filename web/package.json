@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Election polling analysis website",
   "scripts": {
-    "build": "echo 'No build step needed'",
+    "build": "rm -rf public/docs && mkdir -p public/docs && cd docs && Rscript -e \"rmarkdown::render_site()\" && cd .. && cp -r docs/_site/* public/docs/ && cp docs/*.bib docs/*.csl public/docs/ 2>/dev/null || true && cp -r docs/_site/site_libs public/docs/site_libs",
     "start": "serve public"
   },
   "dependencies": {

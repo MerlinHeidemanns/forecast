@@ -1,0 +1,10 @@
+#name: "Polling Analysis Documentation"
+#output_dir: "_site"
+#output:
+#  html_document:
+#    theme: default
+#    css: assets/css/docs.css
+#navbar:
+#  title: "Documentation"
+#  baseurl: /docs
+#  output_dir: _site
