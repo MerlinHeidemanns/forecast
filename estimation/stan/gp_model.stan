@@ -2,6 +2,14 @@
 functions {
   #include fft.stan
   #include utils.stan
+  // Party emergence function
+  //vector party_weight(vector t, real t_emerge, real t_disappear, real rate) {
+  vector party_weight(vector t, real t_emerge, real rate) {
+    vector[num_elements(t)] emergence = inv_logit(rate * (t - t_emerge));
+    //vector[num_elements(t)] survival = inv_logit(-rate * (t - t_disappear));
+    //return emergence .* survival;
+    return emergence;
+  }
 }
 
 data {
@@ -9,7 +17,8 @@ data {
   int n_layer1;
   int n_layer2;
   int n_layer3;
-  int n_parties;
+  int n_parties_fixed;
+  int n_parties_trans;
   int n_surveys;
   int n_elections;
 

@@ -56,6 +56,12 @@ df_elections = election_results %>%
 
 df = load_institute_data("Allensbach", POLL_DATA_DIR)
 
+df %>%
+  filter(vote_share > 0) %>% 
+  group_by(party) %>%
+  summarize(min_date = min(publishing_date)) %>%
+  arrange(min_date)
+
 # Initial data transformation
 df <- df %>%
   rename(
@@ -239,6 +245,12 @@ data_list <- list(
   
   flag_inference = 1
 )
+
+
+################################################################################
+# Model Fitting
+################################################################################
+
 
 mod <- cmdstan_model(
   stan_file = "estimation/stan/gp_model.stan",
