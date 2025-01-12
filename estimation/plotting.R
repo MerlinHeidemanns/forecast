@@ -512,6 +512,7 @@ plot_vote_share_trends <- function(fit, input_data,
                                    index_date,
                                    df, 
                                    election_dates, 
+                                   party_names,
                                    cutoff_date,
                                    save_path = "estimation/plt/trends/") {
   
@@ -522,7 +523,8 @@ plot_vote_share_trends <- function(fit, input_data,
     "GRÜNE"   = "#46962b",  # Green
     "FDP"     = "#FFED00",  # Yellow
     "LINKE"   = "#BE3075",  # Purple/Pink
-    "Sonstige" = "#A4A4A4"  # Grey
+    "Sonstige" = "#A4A4A4", # Grey
+    "REP"     = "Brown"
   )
   
   # Helper function to prepare trend data
@@ -532,7 +534,7 @@ plot_vote_share_trends <- function(fit, input_data,
         layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
         ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
         party = factor(
-          c("CDU/CSU", "FDP", "GRÜNE", "LINKE", "Sonstige", "SPD")[ix_party],
+          party_names[ix_party],
           levels = names(party_colors)
         )
       ) %>%
@@ -551,7 +553,6 @@ plot_vote_share_trends <- function(fit, input_data,
   
   # Prepare observed data (shared across all plots)
   observed_data <- df %>% 
-    mutate(party = ifelse(party == "REP", "Sonstige", party)) %>%
     group_by(uuid, party, date) %>%
     summarize(vote_share = sum(vote_share)) %>%
     ungroup() %>%
