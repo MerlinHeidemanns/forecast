@@ -114,6 +114,22 @@ complex_vector gp_pack_rfft(vector z) {
     return fft;
 }
 
+/**
+Transform a real vector with :code:`n` elements to a vector of complex Fourier coefficients with
+:code:`n` elements ready for inverse real fast Fourier transformation.
+*/
+complex_matrix gp_pack_matrix_rfft(matrix z) {
+    array[2] int d = dims(z);
+    int ncomplex = (d[1] - 1) %/% 2;  // Number of complex Fourier coefficients.
+    int nrfft = d[1] %/% 2 + 1;  // Number of elements in the real FFT.
+    int neg_offset = (d[1] + 1) %/% 2;  // Offset at which the negative frequencies start.
+    // Zero frequency, real part of positive frequency coefficients, and Nyqvist frequency.
+    complex_matrix[nrfft, d[2]] fft = z[1:nrfft, ];
+    // Imaginary part of positive frequency coefficients.
+    fft[2:ncomplex + 1, ] += 1.0i * z[nrfft + 1:d[1], ];
+    return fft;
+}
+
 
 /**
 Transform white noise in the Fourier domain to a Gaussian process realization, i.e., a
@@ -140,14 +156,34 @@ vector gp_inv_rfft(vector z, vector loc, vector cov_rfft) {
 }
 
 
+// matrix gp_inv_rfft_multi_outcome(matrix z, matrix loc, vector cov_rfft) {
+//     array[2] int d = dims(z);
+//     vector[d[1] %/% 2 + 1] rfft_scale = gp_evaluate_rfft_scale(cov_rfft, d[1]);
+//     matrix[d[1], d[2]] A;
+//     for (i in 1:d[2]){
+//       A[,i] = inv_rfft(rfft_scale .* gp_pack_rfft(z[, i]), d[1]);
+//     }
+//     return get_real(A);
+// }
+
+// matrix gp_inv_rfft_multi_outcome(matrix z, matrix loc, vector cov_rfft) {
+//     array[2] int d = dims(z);
+//     vector[d[1] %/% 2 + 1] rfft_scale = gp_evaluate_rfft_scale(cov_rfft, d[1]);
+//     matrix[d[1], d[2]] A;
+//     complex_matrix[d[1], d[2]] packed_matrix = gp_pack_matrix_rfft(z);
+//     for (i in 1:d[2]){
+//       A[,i] = inv_rfft(rfft_scale .* packed_matrix[, i], d[1]);
+//     }
+//     return get_real(A);
+// }
+
 matrix gp_inv_rfft_multi_outcome(matrix z, matrix loc, vector cov_rfft) {
     array[2] int d = dims(z);
     vector[d[1] %/% 2 + 1] rfft_scale = gp_evaluate_rfft_scale(cov_rfft, d[1]);
     matrix[d[1], d[2]] A;
-    for (i in 1:d[2]){
-      A[,i] = get_real(inv_rfft(rfft_scale .* gp_pack_rfft(z[, i]), d[1])) + loc[, i];
-    }
-    return A;
+    complex_matrix[d[1], d[2]] packed_matrix = gp_pack_matrix_rfft(z);
+    A = inv_matrix_rfft((rfft_scale * rep_row_vector(1, d[2])) .* packed_matrix, d[1]);
+    return get_real(A);
 }
 /**
 Evaluate the real fast Fourier transform of the periodic squared exponential kernel.

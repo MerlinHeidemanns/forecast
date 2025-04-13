@@ -60,7 +60,8 @@ election_summary <- election_data %>%
     Greens_Votes = sum(gruene_comb, na.rm = TRUE),  # Combine Green party variations
     FDP_Votes = sum(fdp, na.rm = TRUE),
     Left_Votes = sum(linke_pds_comb, na.rm = TRUE),   # Combine Left party variations
-    AfD_Votes = sum(afd, na.rm = TRUE)
+    AfD_Votes = sum(afd, na.rm = TRUE),
+    REP_votes = sum(rep, na.rm = TRUE)
   ) %>%
   # Calculate vote percentages
   mutate(
@@ -70,7 +71,8 @@ election_summary <- election_data %>%
     Greens_Percent = calc_percentage(Greens_Votes, Total_Valid_Votes),
     FDP_Percent = calc_percentage(FDP_Votes, Total_Valid_Votes),
     Left_Percent = calc_percentage(Left_Votes, Total_Valid_Votes),
-    AfD_Percent = calc_percentage(AfD_Votes, Total_Valid_Votes)
+    AfD_Percent = calc_percentage(AfD_Votes, Total_Valid_Votes),
+    REP_Percent = calc_percentage(REP_votes, Total_Valid_Votes),
   ) %>%
   # Create simplified party columns
   mutate(
@@ -79,10 +81,11 @@ election_summary <- election_data %>%
     `GRÜNE` = Greens_Percent,
     FDP = FDP_Percent,
     LINKE = Left_Percent,
-    AfD = AfD_Percent
+    AfD = AfD_Percent,
+    REP = REP_Percent
   ) %>%
   mutate(
-    Sonstige = 1 - (`CDU/CSU` + SPD + FDP + LINKE + `GRÜNE` + AfD)
+    Sonstige = 1 - (`CDU/CSU` + SPD + FDP + LINKE + `GRÜNE` + AfD + REP)
   )
 
 ################################################################################
@@ -129,7 +132,7 @@ election_summary %>%
 
 election_summary %>%
   left_join(election_dates) %>%
-  select(election_year, election_date, `CDU/CSU`, SPD, `GRÜNE`, FDP, LINKE, AfD, Sonstige) %>%
+  select(election_year, election_date, `CDU/CSU`, SPD, `GRÜNE`, FDP, LINKE, AfD, REP, Sonstige) %>%
   pivot_longer(c(-election_year, -election_date),
                names_to = "party",
                values_to = "vote_share") %>%
@@ -137,7 +140,7 @@ election_summary %>%
 
 election_summary %>%
   left_join(election_dates) %>%
-  select(election_year, election_date, `CDU/CSU`, SPD, `GRÜNE`, FDP, LINKE, AfD, Sonstige) %>%
+  select(election_year, election_date, `CDU/CSU`, SPD, `GRÜNE`, FDP, LINKE, AfD, REP, Sonstige) %>%
   pivot_longer(c(-election_year, -election_date),
                names_to = "party",
                values_to = "vote_share") %>%

@@ -281,6 +281,26 @@ complex_vector expand_rfft(complex_vector y, int n) {
 }
 
 /**
+Expand truncated matrix of one-dimensional discrete Fourier transform coefficients for real input to full
+Fourier coefficients.
+*/
+complex_matrix expand_matrix_rfft(complex_matrix y, int n) {
+    int d1 = rows(y);
+    int d2 = cols(y);
+
+    complex_matrix[n, d2] result;
+    int nrfft = n %/% 2 + 1;
+    int ncomplex = (n - 1) %/% 2;
+    result[:nrfft,] = y;
+    for (i in 1:d2){
+      result[nrfft + 1:n, i] = conj(reverse(y[2:1 + ncomplex, i]));
+    }
+    return result;
+}
+
+
+
+/**
 Compute the one-dimensional inverse discrete Fourier transform for real output.
 
 :param z: Truncated vector of Fourier coefficents with :code:`n %/% 2 + 1` elements.
@@ -290,6 +310,31 @@ Compute the one-dimensional inverse discrete Fourier transform for real output.
 */
 vector inv_rfft(complex_vector z, int n) {
     return get_real(inv_fft(expand_rfft(z, n)));
+}
+
+
+
+
+/**
+Compute the matrix of one-dimensional inverse discrete Fourier transform for real output.
+
+:param z: Truncated vector of Fourier coefficents with :code:`n %/% 2 + 1` elements.
+:param n: Length of the signal (required because the length of the signal cannot be determined from
+    :code:`z` alone).
+:returns: Real signal with :code:`n` elements.
+*/
+complex_matrix inv_matrix_fft(complex_matrix z){
+  int d1 = rows(z);
+  int d2 = cols(z);
+  complex_matrix[d1, d2] result;
+  for (i in 1:d2){
+    result[, i] = inv_fft(z[, i]);
+  }
+  return result;
+}
+
+matrix inv_matrix_rfft(complex_matrix z, int n) {
+    return get_real(inv_matrix_fft(expand_matrix_rfft(z, n)));
 }
 
 /**

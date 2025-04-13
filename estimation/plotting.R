@@ -48,6 +48,8 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
       names_to = "party",
       values_to = "count"
     ) %>%
+    mutate(count = ifelse(count == -99, NA, count)) %>%
+    filter(!is.na(count)) %>%
     group_by(i) %>%
     mutate(
       vote_share = count / sum(count)
@@ -66,6 +68,7 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
         values_to = "val"
       ) %>%
       mutate(i = str_match(var, "(\\d+),")[,2]) %>%
+      filter(val >= 0) %>%
       group_by(i, draw) %>%
       mutate(val = val / sum(val)) %>%
       ungroup() %>%
@@ -95,6 +98,7 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
   
   ggsave(filename = "estimation/plt/ppc/ppc_yrep_density.png",
          plt_dens, 
+         bg = "white",
          width = 7, height = 7)
   
   plt_hist = bayesplot::ppc_hist(survey_y_long$vote_share, 
@@ -107,15 +111,147 @@ create_vote_share_ppc <- function(fit, data_list, n_draws = 100) {
   
   ggsave(filename = "estimation/plt/ppc/ppc_yrep_histogram.png",
          plt_hist, 
+         bg = "white",
          width = 7, height = 7)
   
   # Return both the plot and the transformed data
   return(list(
     plot_dens = plt_dens,
-    plot_hist = plt_hist,
-    survey_y_long = survey_y_long,
-    survey_y_rep_transformed = survey_y_rep_transformed
+    plot_hist = plt_hist
   ))
+}
+
+
+
+#' Plot Voter Transition Weight Evolution
+#' 
+#' Creates a visualization of how voter transition weights evolve over time,
+#' showing uncertainty intervals and trends for specified political parties.
+#'
+#' @param fit A cmdstanr or rstan fit object containing transition_weights samples
+#' @param index_date A dataframe containing the date mapping for indices
+#' @param parties A named character vector of party colors (e.g. c("PARTY" = "#HEX"))
+#' @param title Optional custom title (defaults to "Voter Transition Weights Over Time")
+#' @param show_legend Logical, whether to display the party legend (default TRUE)
+#' @param ci_levels Numeric vector of length 2 for confidence interval levels (default c(0.95, 0.5))
+#'
+#' @return A ggplot2 object
+#' 
+#' @examples
+#' # Basic usage
+#' plot_transition_weights(fit, index_date, party_colors)
+#' 
+#' # Custom title and CI levels
+#' plot_transition_weights(
+#'   fit, 
+#'   index_date, 
+#'   party_colors,
+#'   title = "Vote Switching Patterns",
+#'   ci_levels = c(0.9, 0.6)
+#' )
+plot_transition_weights <- function(
+    fit,
+    index_date,
+    PARTIES_TRANS,
+    title = "Voter Transition Weights Over Time",
+    show_legend = TRUE,
+    ci_levels = c(0.95, 0.5)
+) {
+  # Input validation
+  if (!all(ci_levels > 0 & ci_levels < 1)) {
+    stop("CI levels must be between 0 and 1")
+  }
+  if (length(ci_levels) != 2) {
+    stop("Exactly two CI levels must be provided")
+  }
+  # Traditional German party colors
+  parties <- c(
+    "CDU/CSU" = "#000000",  # Black
+    "SPD"     = "#E3000F",  # Red
+    "GRÜNE"   = "#46962b",  # Green
+    "FDP"     = "#FFED00",  # Yellow
+    "LINKE"   = "#BE3075",  # Purple/Pink
+    "Sonstige" = "#A4A4A4", # Grey
+    "REP"     = "#C8A050"
+  )
+  
+  # Calculate quantiles based on CI levels
+  lower_outer <- (1 - ci_levels[1]) / 2
+  upper_outer <- 1 - lower_outer
+  lower_inner <- (1 - ci_levels[2]) / 2
+  upper_inner <- 1 - lower_inner
+  
+  quantiles <- c(lower_outer, lower_inner, 0.5, upper_inner, upper_outer)
+  
+  # Extract and process transition weights
+  transition_weights <- fit$summary(
+    "transition_weights",
+    ~quantile(., quantiles)
+  ) %>%
+    mutate(
+      layer1_aggregate_idx = as.integer(str_match(variable, "\\[(\\d+),")[, 2]),
+      party = PARTIES_TRANS[as.integer(str_match(variable, ",(\\d+)\\]")[, 2])]
+    ) %>%
+    right_join(index_date)
+  
+  # Create the plot
+  p <- ggplot(
+    transition_weights,
+    aes(x = date, y = `50%`, color = party, fill = party)
+  ) +
+    # Uncertainty bands
+    geom_ribbon(
+      aes(
+        ymin = as.numeric(transition_weights[[paste0(lower_outer * 100, "%")]]),
+        ymax = as.numeric(transition_weights[[paste0(upper_outer * 100, "%")]])
+      ),
+      alpha = 0.125,
+      color = NA
+    ) +
+    geom_ribbon(
+      aes(
+        ymin = as.numeric(transition_weights[[paste0(lower_inner * 100, "%")]]),
+        ymax = as.numeric(transition_weights[[paste0(upper_inner * 100, "%")]])
+      ),
+      alpha = 0.25,
+      color = NA
+    ) +
+    geom_line(linewidth = 1) +
+    scale_color_manual(values = parties) +
+    scale_fill_manual(values = parties) +
+    scale_y_continuous(
+      labels = scales::number_format(accuracy = 0.01),
+      name = "Transition Weight"
+    ) +
+    theme_light() +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.title.x = element_blank(),
+      legend.position = if(show_legend) 'bottom' else 'none',
+      legend.title = element_blank()
+    ) +
+    labs(
+      title = title,
+      subtitle = sprintf(
+        "Lines show median weights with %d%% and %d%% credible intervals",
+        ci_levels[2] * 100,
+        ci_levels[1] * 100
+      ),
+      x = "Date",
+      y = "Transition Weight",
+      caption = sprintf(
+        "Bands show %d%% (darker) and %d%% (lighter) credible intervals.",
+        ci_levels[2] * 100,
+        ci_levels[1] * 100
+      )
+    )
+  
+  
+  ggsave(filename = "estimation/plt/trends/transition_weights.png",
+         p, 
+         width = 7, height = 7)
+  return(p)
 }
 
 
@@ -524,7 +660,7 @@ plot_vote_share_trends <- function(fit, input_data,
     "FDP"     = "#FFED00",  # Yellow
     "LINKE"   = "#BE3075",  # Purple/Pink
     "Sonstige" = "#A4A4A4", # Grey
-    "REP"     = "Brown"
+    "REP"     = "#C8A050"
   )
   
   # Helper function to prepare trend data
