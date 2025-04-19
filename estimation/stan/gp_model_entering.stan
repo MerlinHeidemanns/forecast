@@ -347,6 +347,20 @@ generated quantities {
                             n_survey_responses[i]);
   }
   
+  array[n_surveys, n_parties_fixed + n_parties_trans] real log_lik;
+  for (i in 1:n_parties_fixed + n_parties_trans) {
+    for (j in 1:n_parties_presence[i]){
+      // Note: Parties_survey_idx is parties x 1:n_surveys
+      //       For a given party for the 1:n_parties_presence
+      //       It locates which survey it belongs to
+      //       log_lik is ordered by survey_id and party
+        log_lik[parties_survey_idx[i, j], i] = 
+          poisson_lpmf(survey_y[parties_survey_idx[i, j], i] | (survey_trend_probabilities[parties_survey_idx[i, j], i] + 
+                               rounding_error[parties_survey_idx[i, j], i]) .* to_vector(n_survey_responses)[parties_survey_idx[i, j]]);
+      }
+  }
+  
+  
   // Compute correlation matrix
   trend_party_correlation = multiply_lower_tri_self_transpose(trend_party_correlation_chol);
 

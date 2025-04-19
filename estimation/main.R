@@ -294,8 +294,257 @@ fit <- mod$sample(
 # Model Evaluation and Visualization
 ################################################################################
 
+calculate_elpd <- function(fit, n_remove) {
+  # Extract log_lik from fit
+  log_lik_df <- posterior::as_draws_df(fit$draws("log_lik")) %>%
+    mutate(iter = 1:n()) %>%
+    select(!contains("."))
+  
+  # Process log likelihood values directly
+  log_lik_processed <- log_lik_df %>%
+    pivot_longer(
+      cols = c(-iter),
+      names_to = "var",
+      values_to = "val"
+    ) %>% 
+    mutate(
+      survey_id = as.integer(str_match(var, "(\\d+),")[, 2]),
+      party_id = str_match(var, ",(\\d+)")[, 2]
+    ) %>% 
+    filter(!is.nan(val)) %>%
+    group_by(iter, survey_id) %>%
+    summarize(
+      log_lik = log(sum(exp(val)))
+    )
+  
+  # Calculate ELPD statistics
+  log_lik_processed %>%
+    mutate(
+      indicator = ifelse(survey_id > (max(survey_id) - n_remove), 
+                         "Held out", "Training")
+    ) %>%
+    group_by(survey_id, indicator) %>%
+    summarize(mean_log_lik = mean(log_lik),
+              var_log_lik = var(log_lik)) %>%
+    group_by(indicator) %>%
+    summarize(
+      elpd = sum(mean_log_lik),
+      var_elpd = sum(var_log_lik),
+      n = n()
+    )
+}
+calculate_elpd(fit, data_list$n_remove)
+
+calculate_ppc = function(fit, survey_y, n_remove){
+  
+  
+  survey_y_rep <- posterior::as_draws_df(fit$draws("survey_y_rep")) %>%
+    mutate(iter = 1:n()) %>%
+    select(!contains("."))
+  # Process log likelihood values directly
+  survey_y_rep_processed <- survey_y_rep %>%
+    pivot_longer(
+      cols = c(-iter),
+      names_to = "var",
+      values_to = "val"
+    ) %>% 
+    mutate(
+      survey_id = as.integer(str_match(var, "(\\d+),")[, 2]),
+      party_id = str_match(var, ",(\\d+)")[, 2]
+    ) %>% 
+    filter(val != -1) %>%
+    group_by(iter, survey_id) %>%
+    mutate(
+      share_rep = val/sum(val)
+    )
+  
+  survey_y_processed = survey_y %>%
+    as.data.frame() %>%
+    mutate(survey_id = 1:n()) %>%
+    pivot_longer(
+      cols = c(-survey_id),
+      names_to = "party",
+      values_to = "count",
+      names_prefix = "V"
+    ) %>%
+    mutate(
+      party_id = as.character(as.integer(factor(party, PARTIES)))
+    ) %>%
+    filter(count != -99) %>%
+    group_by(survey_id) %>%
+    mutate(share = count/sum(count))
+  
+  plt = survey_y_rep_processed %>%
+    left_join(
+      survey_y_processed,
+      by = c("survey_id", "party_id")
+    ) %>%
+    ungroup() %>%
+    mutate(
+      indicator = ifelse(survey_id > (max(survey_id) - n_remove), 
+                         "Held out", "Training")
+    ) %>% 
+    group_by(party, indicator) %>%
+    summarize(
+      p_yrep_gt_y = mean(share_rep > share)
+    ) %>%
+    ggplot(aes(x = party, y = p_yrep_gt_y, color = indicator)) + 
+    geom_point() +
+    scale_color_colorblind() + 
+    theme_minimal() +
+    geom_hline(aes(yintercept = 0.5)) + 
+    geom_hline(aes(yintercept = 0.025), linetype = 2) + 
+    geom_hline(aes(yintercept = 0.975), linetype = 2) + 
+    labs(
+      y = "Prob(y_rep > y)",
+      title = "Posterior Predictive Check: y_rep > y",
+      subtitle = "Estimates should be close to 0.5"
+    ) + 
+    theme(
+      axis.title.x = element_blank(),
+      legend.position = "bottom",
+      legend.title = element_blank()
+    )
+  
+  
+  ggsave(filename = "estimation/plt/ppc/ppc_yrep_gt_y.png",
+         plt, 
+         bg = "white",
+         width = 7, height = 7)
+  
+  return(plt)
+}
+calculate_ppc(fit, data_list$survey_y, n_remove)
+
+
+
+
+
+
+
+
+
+
 ## Posterior Predictive Checks
 create_vote_share_ppc(fit, data_list, 100)
+
+survey_y_rep <- fit$draws("survey_y_rep") %>%
+  posterior::as_draws_matrix()
+
+# Transform observed data to long format with vote shares
+survey_y_long <- data_list$survey_y %>%
+  as.data.frame() %>%
+  mutate(i = 1:n()) %>%
+  pivot_longer(
+    c(-i),
+    names_to = "party",
+    values_to = "count"
+  ) %>%
+  mutate(count = ifelse(count == -99, NA, count)) %>%
+  filter(!is.na(count)) %>%
+  group_by(i) %>%
+  mutate(
+    vote_share = count / sum(count)
+  )
+
+# Helper function to transform y_rep into vote shares
+transform_survey_y_rep <- function(survey_y_rep) {
+  survey_y_rep %>%
+    as.data.frame() %>%
+    mutate(
+      draw = 1:n()
+    ) %>%
+    pivot_longer(
+      c(-draw),
+      names_to = "var",
+      values_to = "val"
+    ) %>%
+    mutate(i = str_match(var, "(\\d+),")[,2]) %>%
+    filter(val >= 0) %>%
+    group_by(i, draw) %>%
+    mutate(val = val / sum(val)) %>%
+    ungroup() %>%
+    select(-i) %>%
+    mutate(
+      survey_idx = as.integer(str_match(var, "(\\d+),")[,2]),
+      party_idx = as.integer(str_match(var, ",(\\d+)")[,2])
+    ) %>%
+    select(-var)
+}
+
+# Transform y_rep
+survey_y_rep_transformed <- transform_survey_y_rep(survey_y_rep)
+survey_y_long = survey_y_long %>%
+  mutate(
+    party_idx = as.integer(factor(party, levels = PARTIES)),
+    survey_idx = i
+  )
+
+survey_y_rep_transformed %>%
+  group_by(survey_idx, party_idx) %>%
+  summarize(
+    q50 = quantile(val, 0.5),
+    q025 = quantile(val, 0.025),
+    q975 = quantile(val, 0.975)
+  ) %>%
+  left_join(survey_y_long) %>%
+  ggplot(aes(x = survey_idx)) + 
+  geom_point(aes(y = q50)) + 
+  geom_errorbar(aes(ymin = q025, ymax = q975), width = 0) + 
+  geom_point(aes(y = vote_share), color = "red") + 
+  facet_wrap(party_idx ~.)
+  
+
+survey_y_rep_transformed
+
+# Create plot
+plt_dens <- bayesplot::ppc_dens_overlay(
+  survey_y_long$vote_share, 
+  survey_y_rep_transformed[sample(1:nrow(survey_y_rep_transformed),n_draws),]
+) + 
+  labs(
+    title = "Posterior Predictive Check (density): Vote Shares",
+    x = "Vote Share",
+    y = "Density"
+  )
+
+ggsave(filename = "estimation/plt/ppc/ppc_yrep_density.png",
+       plt_dens, 
+       bg = "white",
+       width = 7, height = 7)
+
+plt_hist = bayesplot::ppc_hist(survey_y_long$vote_share, 
+                               survey_y_rep_transformed[sample(1:nrow(survey_y_rep_transformed),11),]) + 
+  labs(
+    title = "Posterior Predictive Check (histogram): Vote Shares",
+    x = "Vote Share",
+    y = "Density"
+  )
+
+ggsave(filename = "estimation/plt/ppc/ppc_yrep_histogram.png",
+       plt_hist, 
+       bg = "white",
+       width = 7, height = 7)
+
+# Return both the plot and the transformed data
+return(list(
+  plot_dens = plt_dens,
+  plot_hist = plt_hist
+))
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Parameter Analysis
 # Compare alpha parameters across parties
