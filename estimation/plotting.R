@@ -660,7 +660,9 @@ plot_vote_share_trends <- function(fit, input_data,
     "FDP"     = "#FFED00",  # Yellow
     "LINKE"   = "#BE3075",  # Purple/Pink
     "Sonstige" = "#A4A4A4", # Grey
-    "REP"     = "#C8A050"
+    "REP"     = "#C8A050",  # Brown
+    "PIRATEN" = "#FF8800",  # Orange
+    "AfD"     = "#009ee0"   # Light blue
   )
   
   # Helper function to prepare trend data
@@ -977,6 +979,89 @@ plot_trend_volatility <- function(fit, index_date,
   
   return(plot)
 }
+
+
+
+calculate_ppc = function(fit, survey_y, n_remove){
+  
+  
+  survey_y_rep <- posterior::as_draws_df(fit$draws("survey_y_rep")) %>%
+    mutate(iter = 1:n()) %>%
+    select(!contains("."))
+  # Process log likelihood values directly
+  survey_y_rep_processed <- survey_y_rep %>%
+    pivot_longer(
+      cols = c(-iter),
+      names_to = "var",
+      values_to = "val"
+    ) %>% 
+    mutate(
+      survey_id = as.integer(str_match(var, "(\\d+),")[, 2]),
+      party_id = str_match(var, ",(\\d+)")[, 2]
+    ) %>% 
+    filter(val != -1) %>%
+    group_by(iter, survey_id) %>%
+    mutate(
+      share_rep = val/sum(val)
+    )
+  
+  survey_y_processed = survey_y %>%
+    as.data.frame() %>%
+    mutate(survey_id = 1:n()) %>%
+    pivot_longer(
+      cols = c(-survey_id),
+      names_to = "party",
+      values_to = "count",
+      names_prefix = "V"
+    ) %>%
+    mutate(
+      party_id = as.character(as.integer(factor(party, PARTIES)))
+    ) %>%
+    filter(count != -99) %>%
+    group_by(survey_id) %>%
+    mutate(share = count/sum(count))
+  
+  plt = survey_y_rep_processed %>%
+    left_join(
+      survey_y_processed,
+      by = c("survey_id", "party_id")
+    ) %>%
+    ungroup() %>%
+    mutate(
+      indicator = ifelse(survey_id > (max(survey_id) - n_remove), 
+                         "Held out", "Training")
+    ) %>% 
+    group_by(party, indicator) %>%
+    summarize(
+      p_yrep_gt_y = mean(share_rep > share)
+    ) %>%
+    ggplot(aes(x = party, y = p_yrep_gt_y, color = indicator)) + 
+    geom_point() +
+    scale_color_colorblind() + 
+    theme_minimal() +
+    geom_hline(aes(yintercept = 0.5)) + 
+    geom_hline(aes(yintercept = 0.025), linetype = 2) + 
+    geom_hline(aes(yintercept = 0.975), linetype = 2) + 
+    labs(
+      y = "Prob(y_rep > y)",
+      title = "Posterior Predictive Check: y_rep > y",
+      subtitle = "Estimates should be close to 0.5"
+    ) + 
+    theme(
+      axis.title.x = element_blank(),
+      legend.position = "bottom",
+      legend.title = element_blank()
+    )
+  
+  
+  ggsave(filename = "estimation/plt/ppc/ppc_yrep_gt_y.png",
+         plt, 
+         bg = "white",
+         width = 7, height = 7)
+  
+  return(plt)
+}
+
 
 ################################################################################
 # End of File

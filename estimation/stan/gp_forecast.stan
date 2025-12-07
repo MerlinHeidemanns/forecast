@@ -3,16 +3,14 @@ functions {
   #include fft.stan
   #include utils.stan
   // Party emergence function
-  vector party_weight(vector t, real t_disappear, real rate) {
-  //vector party_weight(vector t, real t_emerge, real rate) {
-    //vector[num_elements(t)] emergence = inv_logit(rate * (t - t_emerge));
-    vector[num_elements(t)] survival = inv_logit(-rate * (t - t_disappear));
-    //return emergence .* survival;
-    return survival;
-  }
-  vector party_weight(vector t, real t_emerge, real t_disappear, real rate) {
-    vector[num_elements(t)] emergence = inv_logit(rate * (t - t_emerge));
-    vector[num_elements(t)] survival = inv_logit(-rate * (t - t_disappear));
+  vector party_weight(vector t, 
+                      real t_emerge, 
+                      real t_disappear, 
+                      real always_entered,
+                      real never_exited, 
+                      real rate) {
+    vector[num_elements(t)] emergence = always_entered + (1 - always_entered) * inv_logit(rate * (t - t_emerge));
+    vector[num_elements(t)] survival = never_exited + (1 - never_exited) * inv_logit(-rate * (t - t_disappear));
     return emergence .* survival;
   }
 }
@@ -43,12 +41,15 @@ data {
   // Survey data prediction
   array[n_surveys] int n_parties_presence_prediction;
   array[n_surveys, 
-        n_parties_fixed + n_parties_trans] int parties_survey_prediction_idx;       // which surveys ask for party i
+        max(n_parties_presence_prediction)] int parties_survey_prediction_idx;       // which surveys ask for party i
 
   
   // Transition times for each party
-  array[n_parties_trans] real<lower=0> party_emergence_layer1_idx;
-  array[n_parties_trans] real<lower=0> party_disappearance_layer1_idx;
+  array[n_parties_trans] real party_emergence_layer1_idx;
+  array[n_parties_trans] real party_disappearance_layer1_idx;
+  array[n_parties_trans] real<lower=0, upper = 1> party_always_entered;
+  array[n_parties_trans] real<lower=0, upper = 1> party_never_exited;
+  
   
   // Indices for parties that can be combined into residual
   int<lower=1> residual_idx;         // index of residual category
@@ -174,7 +175,6 @@ transformed parameters {
   
   matrix[n_layer1, n_parties_fixed + n_parties_trans - 1] tmp_scale;
   matrix[n_layer1, n_parties_fixed + n_parties_trans - 1] tmp_trend;
-  matrix[n_layer1, n_parties_fixed + n_parties_trans - 1] tmp_trend_scaled;
   //
   //
   // Compute short term volatility
@@ -194,12 +194,6 @@ transformed parameters {
   // Compute short term trend
       // -- Covariance matrix
   profile("rfft_kernel") {
-    // trend_cov_rfft = gp_sum_exp_quad_cov_rfft(n_layer1_padding, 
-    //                                             1, 
-    //                                             1, 
-    //                                             trend_length_scale[1],
-    //                                             trend_length_scale[2], 
-    //                                             n_layer1_padding) + 1e-9;
     trend_cov_rfft = gp_periodic_exp_quad_cov_rfft(n_layer1_padding, 
                                                 1, 
                                                 trend_length_scale,
@@ -217,12 +211,11 @@ transformed parameters {
                                         trend_cov_rfft
                                       )[1:n_layer1];
     }
-    profile("Scaling the trend"){
-      tmp_trend_scaled = tmp_scale .* tmp_trend;
-    }
+
     profile("Inducing correlation"){
-      trend_short_term[, 2:n_parties_fixed + n_parties_trans] = tmp_trend_scaled * 
-                                      diag_pre_multiply(alpha, trend_party_correlation_chol)';
+      trend_short_term[, 2:n_parties_fixed + n_parties_trans] = 
+                                      (tmp_scale .* tmp_trend) * // Scaling the trend by the variation in the trend
+                                      diag_pre_multiply(alpha, trend_party_correlation_chol)'; // Scaling the correlation matrix
       trend_short_term[, 1] = rep_vector(0.0, n_layer1);
 
     }
@@ -237,11 +230,19 @@ transformed parameters {
   profile("transition_weights"){
     // Adjust transitioning parties
     for (i in 1:n_parties_trans) {
-      //vector[n_layer1] w = party_weight(vec_n_layer1_lin, party_emergence_layer1_idx[i], transition_rate[i]);
-      vector[n_layer1] w = party_weight(vec_n_layer1_lin, party_disappearance_layer1_idx[i], 0.5);
-      trend_long_term[,n_parties_fixed + i]  = w .* trend_long_term[,n_parties_fixed + i] + (1 - w) * (neg_logit_end_state);
+      vector[n_layer1] w = party_weight(vec_n_layer1_lin, 
+                                        party_emergence_layer1_idx[i],
+                                        party_disappearance_layer1_idx[i],
+                                        party_always_entered[i],
+                                        party_never_exited[i], 
+                                        transition_rate[i]);
+      //vector[n_layer1] w = party_weight(vec_n_layer1_lin, party_disappearance_layer1_idx[i], 0.5);
+      trend_long_term[,  n_parties_fixed + i]  = w .* trend_long_term[,n_parties_fixed + i] + (1 - w) * (negative_logit_zero);
+      trend_short_term[, n_parties_fixed + i]  = w .* trend_short_term[,n_parties_fixed + i] + (1 - w) * (negative_logit_zero);
+      
     }
   }
+  
     
   profile("combine"){
     // This section combines the short term trend "trend_short_term" with the long term trend "trend_long_term".
@@ -307,7 +308,7 @@ model {
   // to_vector(polling_error_std_normal) ~ std_normal();
   
   // Likelihood
-  if (flag_inference == 1) {
+  if (flag_inference == 0) {
     profile("llh_contributions") {
       for (i in 1:n_parties_fixed + n_parties_trans) {
         survey_y[parties_survey_idx[i, 1:n_parties_presence[i] - n_remove], i] ~ 
@@ -330,7 +331,12 @@ generated quantities {
   matrix[n_layer1, n_parties_fixed + n_parties_trans] trend_short_term_shares;
   matrix[n_layer1, n_parties_trans] transition_weights;
   for (i in 1:n_parties_trans){
-    transition_weights[, i] = party_weight(vec_n_layer1_lin, party_disappearance_layer1_idx[i], transition_rate[i]);
+    transition_weights[, i] = party_weight(vec_n_layer1_lin, 
+                                        party_emergence_layer1_idx[i],
+                                        party_disappearance_layer1_idx[i],
+                                        party_always_entered[i],
+                                        party_never_exited[i], 
+                                        transition_rate[i]);
   }
   // matrix[n_elections - 1, n_parties] polling_error_distribution_at_observed;
 
@@ -362,7 +368,7 @@ generated quantities {
   
   
   // Compute correlation matrix
-  trend_party_correlation = multiply_lower_tri_self_transpose(trend_party_correlation_chol);
+  trend_party_correlation = tcrossprod(trend_party_correlation_chol);
 
 }
 

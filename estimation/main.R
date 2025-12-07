@@ -32,17 +32,31 @@ election_dates = read_csv("estimation/dta/reference/election_dates.csv")
 POLL_DATA_DIR <- "web/public/polling_data/"
 
 ## Time Period Constants
-LAYER1_PERIOD <- "7 days"     # Weekly
-LAYER2_PERIOD <- "14 days"    # Bi-weekly
+LAYER1_PERIOD <- "14 days"     # Weekly
+LAYER2_PERIOD <- "28 days"    # Bi-weekly
 
 START_DATE = as.Date("1998-01-01")
-END_DATE = as.Date("2008-09-27")
+END_DATE = as.Date("2015-09-27")
 
 PARTIES_FIXED = c("CDU/CSU", "SPD", "FDP","GRÜNE", "LINKE")
 RESIDUAL_CATEGORY = c("Sonstige")
-PARTIES_TRANS = c("REP")
+PARTIES_TRANS = c("AfD")
 
 PARTIES = c(PARTIES_FIXED, RESIDUAL_CATEGORY, PARTIES_TRANS)
+
+PARTY_END_DATES = data.frame(
+  party = c(
+    "AfD"
+  ),
+  start_date = c(
+    as.Date("2013-04-01")
+  ),
+  end_date = c(
+    as.Date("2099-01-01")
+    )
+)
+
+
 
 ################################################################################
 # Date Transformation
@@ -59,16 +73,31 @@ df_elections = election_results %>%
 
 
 ## Polling data
-
-df = load_institute_data("Allensbach", POLL_DATA_DIR) %>%
+df = bind_rows(
+  load_institute_data("Allensbach", POLL_DATA_DIR),
+  #load_institute_data("Forsa", POLL_DATA_DIR)#,
+  #load_institute_data("INSA", POLL_DATA_DIR)
+) %>%
   mutate(
     uuid = paste0(publishing_date, "_", uuid)
   )
 
+df = df %>%
+  mutate(
+    party = ifelse(party %in% c("REP", "Rechte", "PIRATEN", "FW"), "Sonstige", party)
+  ) %>%
+  group_by(uuid, publishing_date, Befragte, Zeitraum, mode, survey_count, 
+           sampling_start_day, sampling_end_day, pollster, party) %>%
+  summarize(
+    vote_share = sum(vote_share, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
 df %>%
   filter(vote_share > 0) %>% 
   group_by(party) %>%
-  summarize(min_date = min(publishing_date)) %>%
+  summarize(min_date = min(publishing_date),
+            max_date = max(publishing_date)) %>%
   arrange(min_date)
 
 
@@ -89,7 +118,7 @@ df_party_combination = df %>%
   mutate(
     party_combination = paste0(party, collapse = " | ")
   ) %>%
-  filter(grepl("Sonstige", party_combination)) 
+  filter(grepl("Sonstige", party_combination))
 
 df_reporting_pattern = df_party_combination %>%
   ungroup() %>%
@@ -154,6 +183,26 @@ pattern_matrix = df_reporting_pattern %>%
   arrange(factor(party_combination, levels = vec_party_combination)) %>%
   select(-party_combination)
 
+party_list <- setNames(index_party$party_idx, index_party$party)
+
+party_indices = matrix(-99,
+           nrow = length(vec_party_combination),
+           ncol = length(party_list))
+party_count = rep(NA, length(vec_party_combination))
+for (i in 1:length(vec_party_combination)){
+  b = c()
+  for (j in names(party_list)){
+    if (grepl(j, vec_party_combination[i])){
+      b = c(b, party_list[[j]])
+    }
+  }
+  party_indices[i, 1:length(b)] = b
+  party_count[i] = length(b)
+}
+
+
+
+
 
 list_party_presence = calculate_party_presence(input_data, PARTIES)
 
@@ -169,7 +218,7 @@ n_surveys <- nrow(input_data)
 
 # Extract indices
 survey_layer1_idx <- input_data$layer1_aggregate_idx
-trend_layer2_idx <- index_date_aggregate$layer2_aggregate_idx  # From index_date, not input_data
+trend_layer2_idx <- date_index_list$index_date_aggregate$layer2_aggregate_idx  # From index_date, not input_data
 
 # Rounding vector
 rounding_error_scale = input_data$rounding
@@ -182,11 +231,11 @@ survey_y <- input_data %>%
 # elections
 n_elections = df_elections %>% nrow
 election_layer1_idx = df_elections$layer1_aggregate_idx
-election_y = df_elections %>%
-  select(all_of(PARTIES))
+#election_y = df_elections %>%
+#  select(all_of(PARTIES))
 
 # spline
-n_knots <- 5
+n_knots <- 10
 spline_basis <- splines::bs(1:n_layer1, df = n_knots, degree = 3, intercept = TRUE)
 
 
@@ -197,10 +246,35 @@ for (i in 1:nrow(mat)){
       mat[list_party_presence$obs_idx[i, j], j] = j
     }
   }
+  k = sum(mat[i, ] > 0)
+  v = mat[i, ]
+  mat[i, 1:k] = v[v > 0]
+  mat[i, (k + 1):ncol(mat)] = -99
 }
 parties_included = apply(mat, 1, function(x) sum( x> 0))
+mat = mat[, 1:max(parties_included)]
 
-
+PARTY_END_DATES = PARTY_END_DATES %>%
+  left_join(
+    date_index_list$index_date %>%
+      select(date, layer1_aggregate_idx) %>%
+      rename(start_date = date,
+             layer1_aggregate_idx_start = layer1_aggregate_idx)
+  ) %>%
+  left_join(
+    date_index_list$index_date %>%
+      select(date, layer1_aggregate_idx) %>%
+      rename(end_date = date,
+             layer1_aggregate_idx_end = layer1_aggregate_idx)
+  ) %>%
+  mutate(
+    party_always_entered = as.integer(is.na(layer1_aggregate_idx_start)),
+    party_never_exited = as.integer(is.na(layer1_aggregate_idx_end)),
+    layer1_aggregate_idx_start = ifelse(is.na(layer1_aggregate_idx_start),
+                                        -99, layer1_aggregate_idx_start),
+    layer1_aggregate_idx_end = ifelse(is.na(layer1_aggregate_idx_end),
+                                        -99, layer1_aggregate_idx_end),
+  )
 
 # Create data list for Stan model
 data_list <- list(
@@ -220,15 +294,16 @@ data_list <- list(
   parties_survey_idx = t(list_party_presence$obs_idx),
   residual_idx = length(PARTIES_FIXED) + 1,
   negative_logit_zero = -5,
-  party_emergence_layer1_idx = 13 - 12,
-  party_disappearance_layer1_idx = 267 + 1,
-
+  party_emergence_layer1_idx = PARTY_END_DATES$layer1_aggregate_idx_start,
+  party_disappearance_layer1_idx = PARTY_END_DATES$layer1_aggregate_idx_end,
+  party_always_entered = PARTY_END_DATES$party_always_entered,
+  party_never_exited = PARTY_END_DATES$party_never_exited,
   
   # Rounding
   rounding_error_scale = rounding_error_scale,
   
   # Varying response options
-  R = R,
+  R = nrow(pattern_starts_ends),
   reporting_pattern = reporting_pattern,
   pattern_matrix = as.matrix(pattern_matrix),
   n_parties_presence = list_party_presence$n_parties_presence,
@@ -267,7 +342,23 @@ data_list <- list(
   
   flag_inference = 1,
   
-  n_remove = 10
+  n_remove = 0,
+  
+  ## Baseline
+  mat_party_indices = party_indices,
+  party_count = party_count,
+  idx_r = input_data$party_combination_idx,
+  
+  lfo_cutoff_index = 600
+)
+
+################################################################################
+# Model Fitting - Benchmark
+################################################################################
+
+mod = cmdstan_model(
+  stan_file = 'estimation/stan/benchmark/benchmark_forecast.stan',
+  stanc_options = list("O1")
 )
 
 
@@ -286,134 +377,334 @@ fit <- mod$sample(
   data = data_list,
   chains = 6,
   parallel_chains = 6,
-  iter_warmup = 200,
-  iter_sampling = 50
+  iter_warmup = 500,
+  iter_sampling = 500,
+  refresh = 500
 )
 
-################################################################################
-# Model Evaluation and Visualization
-################################################################################
-
-calculate_elpd <- function(fit, n_remove) {
-  # Extract log_lik from fit
-  log_lik_df <- posterior::as_draws_df(fit$draws("log_lik")) %>%
-    mutate(iter = 1:n()) %>%
-    select(!contains("."))
+starting_values = fit$summary("trend_voteshares") %>%
+  filter(
+    grepl("\\[2,", variable)
+  )
+plot_voting_trends(fit, index_date, df, election_dates, party_names = PARTIES,
+                   cutoff_date = max(df$date) - 120)
+plot_voting_trends <- function(fit,
+                               index_date,
+                               df,
+                               election_dates,
+                               party_names,
+                               cutoff_date,
+                               save_path = "estimation/plt/trends/") {
   
-  # Process log likelihood values directly
-  log_lik_processed <- log_lik_df %>%
-    pivot_longer(
-      cols = c(-iter),
-      names_to = "var",
-      values_to = "val"
-    ) %>% 
-    mutate(
-      survey_id = as.integer(str_match(var, "(\\d+),")[, 2]),
-      party_id = str_match(var, ",(\\d+)")[, 2]
-    ) %>% 
-    filter(!is.nan(val)) %>%
-    group_by(iter, survey_id) %>%
-    summarize(
-      log_lik = log(sum(exp(val)))
-    )
+  party_colors <- c(
+    "CDU/CSU"  = "#000000",
+    "SPD"      = "#E3000F",
+    "GRÜNE"    = "#46962b",
+    "FDP"      = "#FFED00",
+    "LINKE"    = "#BE3075",
+    "Sonstige" = "#A4A4A4",
+    "REP"      = "#C8A050",
+    "PIRATEN"  = "#FF8800",
+    "AfD"      = "#009ee0"
+  )
   
-  # Calculate ELPD statistics
-  log_lik_processed %>%
+  trend_data <- fit$summary("trend_voteshares", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
     mutate(
-      indicator = ifelse(survey_id > (max(survey_id) - n_remove), 
-                         "Held out", "Training")
+      layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
+      ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
+      party = factor(party_names[ix_party], levels = names(party_colors))
     ) %>%
-    group_by(survey_id, indicator) %>%
-    summarize(mean_log_lik = mean(log_lik),
-              var_log_lik = var(log_lik)) %>%
-    group_by(indicator) %>%
-    summarize(
-      elpd = sum(mean_log_lik),
-      var_elpd = sum(var_log_lik),
-      n = n()
-    )
-}
-calculate_elpd(fit, data_list$n_remove)
-
-calculate_ppc = function(fit, survey_y, n_remove){
+    right_join(index_date %>% select(date, layer1_aggregate_idx), relationship = "many-to-many")
   
+  observed_data <- df %>%
+    group_by(uuid, party, date) %>%
+    summarize(vote_share = sum(vote_share) / 100, .groups = "drop")
   
-  survey_y_rep <- posterior::as_draws_df(fit$draws("survey_y_rep")) %>%
-    mutate(iter = 1:n()) %>%
-    select(!contains("."))
-  # Process log likelihood values directly
-  survey_y_rep_processed <- survey_y_rep %>%
-    pivot_longer(
-      cols = c(-iter),
-      names_to = "var",
-      values_to = "val"
-    ) %>% 
-    mutate(
-      survey_id = as.integer(str_match(var, "(\\d+),")[, 2]),
-      party_id = str_match(var, ",(\\d+)")[, 2]
-    ) %>% 
-    filter(val != -1) %>%
-    group_by(iter, survey_id) %>%
-    mutate(
-      share_rep = val/sum(val)
-    )
+  relevant_elections <- election_dates %>%
+    filter(date >= min(trend_data$date), date <= max(trend_data$date))
   
-  survey_y_processed = survey_y %>%
-    as.data.frame() %>%
-    mutate(survey_id = 1:n()) %>%
-    pivot_longer(
-      cols = c(-survey_id),
-      names_to = "party",
-      values_to = "count",
-      names_prefix = "V"
-    ) %>%
-    mutate(
-      party_id = as.character(as.integer(factor(party, PARTIES)))
-    ) %>%
-    filter(count != -99) %>%
-    group_by(survey_id) %>%
-    mutate(share = count/sum(count))
-  
-  plt = survey_y_rep_processed %>%
-    left_join(
-      survey_y_processed,
-      by = c("survey_id", "party_id")
-    ) %>%
-    ungroup() %>%
-    mutate(
-      indicator = ifelse(survey_id > (max(survey_id) - n_remove), 
-                         "Held out", "Training")
-    ) %>% 
-    group_by(party, indicator) %>%
-    summarize(
-      p_yrep_gt_y = mean(share_rep > share)
-    ) %>%
-    ggplot(aes(x = party, y = p_yrep_gt_y, color = indicator)) + 
-    geom_point() +
-    scale_color_colorblind() + 
-    theme_minimal() +
-    geom_hline(aes(yintercept = 0.5)) + 
-    geom_hline(aes(yintercept = 0.025), linetype = 2) + 
-    geom_hline(aes(yintercept = 0.975), linetype = 2) + 
+  plot <- ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
+    geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), alpha = 0.125, color = NA) +
+    geom_ribbon(aes(ymin = `25%`, ymax = `75%`), alpha = 0.25, color = NA) +
+    geom_line(linewidth = 1) +
+    geom_point(data = observed_data, aes(y = vote_share), size = 2) +
+    geom_hline(yintercept = 0.05, linetype = "dashed", alpha = 0.5) +
+    geom_vline(xintercept = relevant_elections$date, linetype = "dashed", color = "darkred", alpha = 0.5) +
+    geom_vline(xintercept = cutoff_date, linetype = "twodash", alpha = 0.75) +
+    annotate("label", x = min(trend_data$date), y = 0.05, label = "5% threshold",
+             hjust = 0, size = 3, fill = "white", alpha = 0.8) +
+    scale_color_manual(values = party_colors) +
+    scale_fill_manual(values = party_colors) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 0.5)) +
     labs(
-      y = "Prob(y_rep > y)",
-      title = "Posterior Predictive Check: y_rep > y",
-      subtitle = "Estimates should be close to 0.5"
-    ) + 
+      title = "Overall Vote Shares Over Time",
+      subtitle = "Combined long-term and short-term trends\nLines show median with 50% and 95% credible intervals",
+      y = "Vote Share"
+    ) +
+    theme_light() +
     theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1),
       axis.title.x = element_blank(),
       legend.position = "bottom",
       legend.title = element_blank()
     )
   
-  
-  ggsave(filename = "estimation/plt/ppc/ppc_yrep_gt_y.png",
-         plt, 
-         bg = "white",
-         width = 7, height = 7)
-  
-  return(plt)
+  ggsave(file.path(save_path, "overall_trend.png"), plot, width = 12, height = 8, dpi = 300)
 }
+
+function(fit, input_data, 
+         index_date,
+         df, 
+         election_dates, 
+         party_names,
+         cutoff_date,
+         save_path = "estimation/plt/trends/") {
+  
+  # Traditional German party colors
+  party_colors <- c(
+    "CDU/CSU" = "#000000",  # Black
+    "SPD"     = "#E3000F",  # Red
+    "GRÜNE"   = "#46962b",  # Green
+    "FDP"     = "#FFED00",  # Yellow
+    "LINKE"   = "#BE3075",  # Purple/Pink
+    "Sonstige" = "#A4A4A4", # Grey
+    "REP"     = "#C8A050",  # Brown
+    "PIRATEN" = "#FF8800",  # Orange
+    "AfD"     = "#009ee0"   # Light blue
+  )
+  
+  # Helper function to prepare trend data
+  prepare_trend_data <- function(trend_var) {
+    fit$summary(trend_var, ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
+      mutate(
+        layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
+        ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
+        party = factor(
+          party_names[ix_party],
+          levels = names(party_colors)
+        )
+      ) %>%
+      right_join(index_date %>% 
+                   select(date, layer1_aggregate_idx),
+                 relationship = 'many-to-many')
+  }
+  
+  # Helper function to filter relevant election dates
+  get_relevant_elections <- function(trend_data) {
+    election_dates %>%
+      filter(
+        date >= min(trend_data$date),
+        date <= max(trend_data$date)
+      )
+  }
+  
+  # Prepare observed data (shared across all plots)
+  observed_data <- df %>% 
+    group_by(uuid, party, date) %>%
+    summarize(vote_share = sum(vote_share)) %>%
+    ungroup() %>%
+    mutate(vote_share = vote_share / 100)
+  
+  # Helper function to create trend plot
+  create_trend_plot <- function(trend_data, title_prefix, trend_description, trend_var) {
+    relevant_elections <- get_relevant_elections(trend_data)
+    
+    # Define legend settings based on plot type
+    legend_settings <- if (grepl("short_term", trend_var)) {
+      theme(legend.position = "none")
+    } else {
+      theme(
+        legend.position = "bottom",
+        legend.title = element_blank()
+      )
+    }
+    
+    ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
+      # Add uncertainty bands
+      geom_ribbon(
+        aes(ymin = `2.5%`, ymax = `97.5%`),
+        alpha = 0.125,
+        color = NA
+      ) +
+      geom_ribbon(
+        aes(ymin = `25%`, ymax = `75%`),
+        alpha = 0.25,
+        color = NA
+      ) +
+      # Add trend lines and observed points (if applicable)
+      geom_line(linewidth = 1) +
+      {if (!grepl("short_term", trend_var)) 
+        geom_point(
+          data = observed_data,
+          aes(y = vote_share),
+          size = 2
+        )
+      } +
+      # Customize appearance
+      scale_color_manual(values = party_colors) +
+      scale_fill_manual(values = party_colors) +
+      {if (grepl("short_term", trend_var)) {
+        facet_wrap(~party, ncol = 2)
+      }} + 
+      {if (grepl("short_term", trend_var)) {
+        scale_y_continuous(
+          labels = scales::percent_format(accuracy = 1),
+          name = "Percentage Difference from Long-term Average",
+          # Let the limits be determined by the data
+          expand = expansion(mult = 0.05)
+        )
+      } else {
+        scale_y_continuous(
+          labels = scales::percent_format(accuracy = 1),
+          limits = c(0, 0.5),
+          name = "Vote Share"
+        )
+      }} +
+      theme_light() +
+      theme(
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank()
+      ) +
+      legend_settings +
+      # Add 5% threshold line and annotation for non-short-term plots
+      {if (!grepl("short_term", trend_var)) {
+        list(
+          geom_hline(
+            yintercept = 0.05,
+            linetype = "dashed",
+            color = "black",
+            alpha = 0.5
+          ),
+          annotate(
+            "label",
+            x = min(trend_data$date, na.rm = TRUE),
+            y = 0.05,
+            label = "5% electoral threshold",
+            hjust = 0,
+            size = 3,
+            fill = "white",
+            alpha = 0.8,
+            label.r = unit(0.15, "lines")
+          )
+        )
+      }} +
+      # Add labels
+      labs(
+        title = paste0(title_prefix, " Vote Shares Over Time"),
+        subtitle = paste0(trend_description, "\nLines show median predictions with 50% and 95% credible intervals"),
+        x = "Date",
+        y = "Vote Share",
+        caption = "Points show observed data. Bands show 50% (darker) and 95% (lighter) credible intervals."
+      ) +
+      # Add election date markers and labels
+      geom_vline(
+        data = relevant_elections,
+        aes(xintercept = date),
+        linetype = "dashed",
+        color = "darkred",
+        alpha = 0.5
+      ) +
+      geom_text(
+        data = relevant_elections,
+        aes(
+          x = date,
+          y = max(trend_data$`97.5%`) -0.01,
+          label = format(date, "%b %Y")
+        ),
+        angle = 90,
+        hjust = 0.25,
+        vjust = -0.45,
+        size = 3,
+        color = "darkred",
+        inherit.aes = FALSE
+      ) +
+      # Add cutoff date marker and label
+      geom_vline(
+        data = data.frame(date = cutoff_date),
+        aes(xintercept = date),
+        linetype = "twodash",
+        alpha = 0.75
+      ) +
+      geom_text(
+        data = data.frame(date = cutoff_date),
+        aes(
+          x = date,
+          y = max(trend_data$`97.5%`) -0.01,
+          label = "Data cutoff"
+        ),
+        angle = 90,
+        hjust = 0.25,
+        vjust = -0.45,
+        size = 3,
+        inherit.aes = FALSE
+      )
+  }
+  
+  # Define trend components
+  trend_components <- 
+    list(
+      var = "trend_voteshares",
+      prefix = "Overall",
+      desc = "Combined long-term and short-term trends",
+      filename = "overall_trend_baseline.png"
+    )
+  
+  index_date = date_index_list$index_date
+  # Create and save all plots
+  plots <- list()
+  
+    # Prepare trend data
+    trend_data <- prepare_trend_data(trend_components$var)
+    
+    # Create plot
+    plot <- create_trend_plot(
+      trend_data = trend_data,
+      title_prefix = trend_components$prefix,
+      trend_description = trend_components$desc,
+      trend_var = trend_components$var
+    )
+    
+    # Save plot
+    ggsave(
+      filename = file.path(save_path, component$filename),
+      plot = plot,
+      width = 12,
+      height = 8,
+      dpi = 300
+    )
+    
+    plots[[component$var]] <- plot
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+################################################################################
+# Model Evaluation and Visualization
+################################################################################
+
+calculate_elpd(fit, data_list$n_remove)
+
 calculate_ppc(fit, data_list$survey_y, n_remove)
 
 
@@ -427,123 +718,6 @@ calculate_ppc(fit, data_list$survey_y, n_remove)
 
 ## Posterior Predictive Checks
 create_vote_share_ppc(fit, data_list, 100)
-
-survey_y_rep <- fit$draws("survey_y_rep") %>%
-  posterior::as_draws_matrix()
-
-# Transform observed data to long format with vote shares
-survey_y_long <- data_list$survey_y %>%
-  as.data.frame() %>%
-  mutate(i = 1:n()) %>%
-  pivot_longer(
-    c(-i),
-    names_to = "party",
-    values_to = "count"
-  ) %>%
-  mutate(count = ifelse(count == -99, NA, count)) %>%
-  filter(!is.na(count)) %>%
-  group_by(i) %>%
-  mutate(
-    vote_share = count / sum(count)
-  )
-
-# Helper function to transform y_rep into vote shares
-transform_survey_y_rep <- function(survey_y_rep) {
-  survey_y_rep %>%
-    as.data.frame() %>%
-    mutate(
-      draw = 1:n()
-    ) %>%
-    pivot_longer(
-      c(-draw),
-      names_to = "var",
-      values_to = "val"
-    ) %>%
-    mutate(i = str_match(var, "(\\d+),")[,2]) %>%
-    filter(val >= 0) %>%
-    group_by(i, draw) %>%
-    mutate(val = val / sum(val)) %>%
-    ungroup() %>%
-    select(-i) %>%
-    mutate(
-      survey_idx = as.integer(str_match(var, "(\\d+),")[,2]),
-      party_idx = as.integer(str_match(var, ",(\\d+)")[,2])
-    ) %>%
-    select(-var)
-}
-
-# Transform y_rep
-survey_y_rep_transformed <- transform_survey_y_rep(survey_y_rep)
-survey_y_long = survey_y_long %>%
-  mutate(
-    party_idx = as.integer(factor(party, levels = PARTIES)),
-    survey_idx = i
-  )
-
-survey_y_rep_transformed %>%
-  group_by(survey_idx, party_idx) %>%
-  summarize(
-    q50 = quantile(val, 0.5),
-    q025 = quantile(val, 0.025),
-    q975 = quantile(val, 0.975)
-  ) %>%
-  left_join(survey_y_long) %>%
-  ggplot(aes(x = survey_idx)) + 
-  geom_point(aes(y = q50)) + 
-  geom_errorbar(aes(ymin = q025, ymax = q975), width = 0) + 
-  geom_point(aes(y = vote_share), color = "red") + 
-  facet_wrap(party_idx ~.)
-  
-
-survey_y_rep_transformed
-
-# Create plot
-plt_dens <- bayesplot::ppc_dens_overlay(
-  survey_y_long$vote_share, 
-  survey_y_rep_transformed[sample(1:nrow(survey_y_rep_transformed),n_draws),]
-) + 
-  labs(
-    title = "Posterior Predictive Check (density): Vote Shares",
-    x = "Vote Share",
-    y = "Density"
-  )
-
-ggsave(filename = "estimation/plt/ppc/ppc_yrep_density.png",
-       plt_dens, 
-       bg = "white",
-       width = 7, height = 7)
-
-plt_hist = bayesplot::ppc_hist(survey_y_long$vote_share, 
-                               survey_y_rep_transformed[sample(1:nrow(survey_y_rep_transformed),11),]) + 
-  labs(
-    title = "Posterior Predictive Check (histogram): Vote Shares",
-    x = "Vote Share",
-    y = "Density"
-  )
-
-ggsave(filename = "estimation/plt/ppc/ppc_yrep_histogram.png",
-       plt_hist, 
-       bg = "white",
-       width = 7, height = 7)
-
-# Return both the plot and the transformed data
-return(list(
-  plot_dens = plt_dens,
-  plot_hist = plt_hist
-))
-}
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 ## Parameter Analysis
@@ -586,16 +760,16 @@ fit$summary("neg_logit_end_state")
 # Plot main vote share trends
 plot_vote_share_trends(fit, 
                        input_data, 
-                       index_date$index_date, 
+                       date_index_list$index_date, 
                        df, 
                        party_names = PARTIES,
                        election_dates, 
                        cutoff_date = max(df$date) - 120)
 
 # Plot trend volatility
-plot_trend_volatility(fit, index_date$index_date, election_dates)
+plot_trend_volatility(fit, date_index_list$index_date, election_dates)
 
-plot_transition_weights(fit, index_date$index_date, PARTIES_TRANS)
+plot_transition_weights(fit, date_index_list$index_date, PARTIES_TRANS)
 
 
 ## Export Results
