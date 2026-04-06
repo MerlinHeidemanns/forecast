@@ -1,0 +1,9 @@
+pollster,full_name,primary_method,active,n_polls,first_poll,last_poll,median_n,pct_n_known,notes
+Allensbach,Institut für Demoskopie Allensbach,phone,TRUE,329,1998-03-25,2024-11-22,1237.5,38.297872340425535,"Oldest German pollster, face-to-face historically"
+Forsa,Forsa – Gesellschaft für Sozialforschung und statistische Analysen,phone,TRUE,1401,1998-04-02,2024-12-10,2502,78.01570306923627,Largest weekly sample sizes (~2500)
+Forsch’gr.Wahlen,Forschungsgruppe Wahlen,phone,TRUE,490,1998-01-16,2024-12-06,1268,85.71428571428571,Conducts Politbarometer for ZDF
+GMS,GMS Dr. Jung GmbH,phone,FALSE,230,2002-02-22,2023-09-19,1005,100,"Smaller institute, less frequent polling"
+INSA,INSA-Consulere GmbH,online,TRUE,849,2012-03-27,2024-12-16,2009,76.08951707891637,"Online panel, high frequency since ~2014"
+Infratestdimap,Infratest dimap,phone,TRUE,894,1998-04-04,2024-12-05,1205.5,61.521252796420576,Conducts DeutschlandTrend for ARD
+Verian(Emnid),Verian (formerly Kantar/Emnid),phone,TRUE,1309,1998-04-03,2024-11-29,2305.5,70.58823529411765,Weekly polls for Bild am Sonntag
+Yougov,YouGov Deutschland,online,TRUE,103,2017-05-05,2024-12-05,1633,100,"Online panel, MRP methodology"

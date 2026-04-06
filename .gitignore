@@ -1,0 +1,37 @@
+.DS_Store
+.Rhistory
+.idea/
+**/node_modules/
+**/_site/
+**/.DS_Store
+package-lock.json
+web/public/docs/
+.Rproj.user
+
+# Python
+__pycache__/
+*.pyc
+
+# Model fit (61MB, cached in CI, refit locally)
+data/spline_fit.rds
+data/simple_rw_fit.rds
+
+# Pipeline runtime output
+pipeline_result.json
+
+# Compiled Stan binaries
+estimation/stan/spline
+estimation/stan/simple_rw
+estimation/stan/gp_model_entering
+estimation/stan/gp_model_constant_volatility
+estimation/stan/benchmark/benchmark_forecast
+estimation/stan/benchmark/benchmark_floor_function
+estimation/stan/benchmark/benchmark_spline
+
+# IDE
+*.iml
+
+# Temp artifacts
+design_doc_step_1_2.docx
+raw_vote_shares.png
+instructions/

@@ -3,8 +3,107 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome to Polling Analysis</title>
+    <title>Polling Analysis</title>
     <link rel="stylesheet" href="/css/styles.css">
+    <style>
+        .forecast-panel {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 24px 28px;
+            margin: 1.5rem 0 2rem;
+            background: #fafafa;
+        }
+        .forecast-panel-header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .forecast-panel-header h3 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: #111;
+        }
+        .forecast-panel-header .meta {
+            font-size: 0.8rem;
+            color: #999;
+        }
+        .party-bars {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .party-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .party-name {
+            width: 72px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #333;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .party-bar-track {
+            flex: 1;
+            height: 22px;
+            background: #eee;
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+        .party-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.6s ease;
+        }
+        .party-bar-ci {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            border-radius: 4px;
+            opacity: 0.25;
+        }
+        .party-pct {
+            width: 52px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #111;
+            flex-shrink: 0;
+        }
+        .party-ci {
+            width: 80px;
+            font-size: 0.75rem;
+            color: #999;
+            flex-shrink: 0;
+        }
+        .forecast-footer {
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid #e8e8e8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: #999;
+        }
+        .forecast-footer a {
+            font-weight: 500;
+        }
+        .forecast-placeholder {
+            color: #999;
+            font-style: italic;
+            padding: 2rem 0;
+            text-align: center;
+        }
+        @media (max-width: 600px) {
+            .party-ci { display: none; }
+            .party-name { width: 56px; font-size: 0.78rem; }
+            .party-pct { width: 44px; font-size: 0.85rem; }
+        }
+    </style>
 </head>
 <body>
 <header class="top-nav">
@@ -17,11 +116,77 @@
 </header>
 
 <main class="standard-content">
-    <h1>Welcome to Polling Analysis</h1>
-    <p>Our statistical models analyze polling data across multiple countries to provide accurate electoral forecasts. Using advanced methodology and comprehensive data sources, we deliver insights into electoral trends and likely outcomes.</p>
+    <h1>Polling Analysis</h1>
+    <p>Statistical models fitted to polling data to estimate electoral trends. Using Bayesian methodology and comprehensive data sources across multiple institutes.</p>
 
-    <h2>Latest Updates</h2>
-    <p>Explore our most recent forecast updates and methodology improvements.</p>
+    <h2>Latest Estimates</h2>
+
+    <div id="forecast-germany" class="forecast-panel">
+        <p class="forecast-placeholder">Loading forecast data...</p>
+    </div>
 </main>
+
+<script>
+(function () {
+    "use strict";
+
+    const panel = document.getElementById("forecast-germany");
+    if (!panel) return;
+
+    fetch("/data/current_forecast.json")
+        .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(renderPanel)
+        .catch(() => {
+            panel.innerHTML = '<p class="forecast-placeholder">Forecast data unavailable.</p>';
+        });
+
+    function renderPanel(data) {
+        const parties = data.parties;
+        const maxMedian = Math.max(...parties.map((p) => p.q95));
+        const barScale = 100 / maxMedian; // scale so widest bar ~ 100%
+
+        const meta = data.meta;
+        const dateStr = new Date(data.date + "T00:00:00").toLocaleDateString("en-GB", {
+            day: "numeric", month: "short", year: "numeric"
+        });
+
+        let html = `
+            <div class="forecast-panel-header">
+                <h3>Germany</h3>
+                <span class="meta">Estimate as of ${dateStr}</span>
+            </div>
+            <div class="party-bars">`;
+
+        parties.forEach((p) => {
+            const pct = (p.median * 100).toFixed(1);
+            const lo = (p.q05 * 100).toFixed(1);
+            const hi = (p.q95 * 100).toFixed(1);
+            const barW = (p.median * barScale).toFixed(1);
+            const ciLeft = (p.q05 * barScale).toFixed(1);
+            const ciW = ((p.q95 - p.q05) * barScale).toFixed(1);
+
+            html += `
+                <div class="party-row">
+                    <span class="party-name">${p.display}</span>
+                    <div class="party-bar-track">
+                        <div class="party-bar-ci" style="left:${ciLeft}%;width:${ciW}%;background:${p.color}"></div>
+                        <div class="party-bar-fill" style="width:${barW}%;background:${p.color}"></div>
+                    </div>
+                    <span class="party-pct">${pct}%</span>
+                    <span class="party-ci">${lo} – ${hi}%</span>
+                </div>`;
+        });
+
+        html += `</div>
+            <div class="forecast-footer">
+                <span>Based on ${meta.n_polls_total.toLocaleString()} polls from ${meta.last_poll_pollster} and others</span>
+                <a href="/forecasts">Full forecast &rarr;</a>
+            </div>`;
+
+        panel.innerHTML = html;
+    }
+})();
+</script>
+<script src="/js/router.js"></script>
 </body>
 </html>

@@ -5,6 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Forecasts</title>
     <link rel="stylesheet" href="/css/styles.css">
+    <style>
+        #chart {
+            position: relative;
+            width: 100%;
+            margin: 1rem 0 2rem;
+        }
+        #chart svg {
+            display: block;
+        }
+        .x-axis text, .y-axis text, .x-axis-context text {
+            font-size: 11px;
+            fill: #666;
+        }
+        .x-axis line, .y-axis line, .x-axis-context line {
+            stroke: #ccc;
+        }
+        .x-axis path, .y-axis path, .x-axis-context path {
+            stroke: #ccc;
+        }
+        .brush .selection {
+            fill: #ddd;
+            fill-opacity: 0.4;
+            stroke: #aaa;
+            stroke-width: 0.5;
+        }
+    </style>
 </head>
 <body>
 <header class="top-nav">
@@ -19,13 +45,12 @@
 <div class="container">
     <h1>Polling Forecasts</h1>
     <h2>Germany</h2>
-    <p>Below </p>
+    <p>Estimated vote share trends from a Bayesian B-spline model fitted to Sonntagsfrage polls from eight institutes. Shaded bands show 50%, 80%, and 90% credible intervals. Dots are raw poll results.</p>
     <div id="chart"></div>
-    <h2>Other country</h2>
 </div>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <script src="/js/visualization.js"></script>
-<script src="/js/main.js"></script>
+<script src="/js/router.js"></script>
 </body>
 </html>

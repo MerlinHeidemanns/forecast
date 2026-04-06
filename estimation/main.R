@@ -1,922 +1,339 @@
 ################################################################################
-# Setup and Configuration
+# Main Fitting Script — B-Spline Model
+#
+# Purpose: Load canonical data, fit B-spline model on log-odds,
+#          run diagnostics, plot trends, save posterior.
+#          Must be run from the project root directory.
+#
+# Usage:   source("estimation/main.R")
 ################################################################################
 
-## Working Directory
-setwd("/Users/merlinheidemanns/projects/forecast")
-
-## Load Required Libraries
 library(tidyverse)
 library(cmdstanr)
 library(lubridate)
-library(ggthemes)
+library(splines)
 
-## Source Custom Functions
-source("estimation/utils.R")
-source("estimation/plotting.R")
-source("estimation/libs_input.R")
+source("estimation/canonicalize.R")
+source("estimation/build_references.R")
+source("estimation/theme.R")
 
-################################################################################
-# Data Import
-################################################################################
-
-## Load Reference Data
-election_results = read_csv("estimation/dta/processed/germany_federal_elections_wide.csv")
-election_dates = read_csv("estimation/dta/reference/election_dates.csv")
 
 ################################################################################
-# Global Constants
+# Constants
 ################################################################################
 
-## Directory Paths
-POLL_DATA_DIR <- "web/public/polling_data/"
+LAYER_PERIOD <- "14 days"
+START_DATE   <- as.Date("1998-01-01")
+END_DATE     <- Sys.Date()
 
-## Time Period Constants
-LAYER1_PERIOD <- "14 days"     # Weekly
-LAYER2_PERIOD <- "28 days"    # Bi-weekly
+PARTIES <- c("CDU/CSU", "SPD", "GRÜNE", "FDP", "AfD", "LINKE", "Sonstige")
 
-START_DATE = as.Date("1998-01-01")
-END_DATE = as.Date("2015-09-27")
-
-PARTIES_FIXED = c("CDU/CSU", "SPD", "FDP","GRÜNE", "LINKE")
-RESIDUAL_CATEGORY = c("Sonstige")
-PARTIES_TRANS = c("AfD")
-
-PARTIES = c(PARTIES_FIXED, RESIDUAL_CATEGORY, PARTIES_TRANS)
-
-PARTY_END_DATES = data.frame(
-  party = c(
-    "AfD"
-  ),
-  start_date = c(
-    as.Date("2013-04-01")
-  ),
-  end_date = c(
-    as.Date("2099-01-01")
-    )
+## Canonical column name -> display name (for election results)
+## Used with rename(): new_name = "old_name", so: `CDU/CSU` = "cdu_csu"
+COL_TO_PARTY <- c(
+  `CDU/CSU` = "cdu_csu", SPD = "spd", `GRÜNE` = "gruene",
+  FDP = "fdp", AfD = "afd", LINKE = "linke", Sonstige = "sonstige"
 )
 
 
-
 ################################################################################
-# Date Transformation
+# Data Generation — build canonical CSVs if missing
 ################################################################################
 
-## Election data
-df_elections = election_results %>%
-  filter(
-    election_date > START_DATE,
-    election_date < END_DATE
-  ) %>%
-  arrange(election_date) %>%
-  mutate(election_idx = 1:n())
+if (!file.exists("data/polls.csv")) {
+  message("data/polls.csv not found — running canonicalize_polls()...")
+  canonicalize_polls()
+}
 
-
-## Polling data
-df = bind_rows(
-  load_institute_data("Allensbach", POLL_DATA_DIR),
-  #load_institute_data("Forsa", POLL_DATA_DIR)#,
-  #load_institute_data("INSA", POLL_DATA_DIR)
-) %>%
-  mutate(
-    uuid = paste0(publishing_date, "_", uuid)
-  )
-
-df = df %>%
-  mutate(
-    party = ifelse(party %in% c("REP", "Rechte", "PIRATEN", "FW"), "Sonstige", party)
-  ) %>%
-  group_by(uuid, publishing_date, Befragte, Zeitraum, mode, survey_count, 
-           sampling_start_day, sampling_end_day, pollster, party) %>%
-  summarize(
-    vote_share = sum(vote_share, na.rm = TRUE)
-  ) %>%
-  ungroup()
-
-df %>%
-  filter(vote_share > 0) %>% 
-  group_by(party) %>%
-  summarize(min_date = min(publishing_date),
-            max_date = max(publishing_date)) %>%
-  arrange(min_date)
-
-
-df = transform_polling_data(
-  df,
-  START_DATE,
-  END_DATE,
-  layer1_period = LAYER1_PERIOD,
-  parties = PARTIES
-)
-
-
-df_party_combination = df %>%
-  filter(vote_share > 0) %>%
-  select(uuid, party) %>%
-  group_by(uuid) %>%
-  arrange(uuid, party) %>%
-  mutate(
-    party_combination = paste0(party, collapse = " | ")
-  ) %>%
-  filter(grepl("Sonstige", party_combination))
-
-df_reporting_pattern = df_party_combination %>%
-  ungroup() %>%
-  distinct(party_combination, party) %>%
-  mutate(flag = 1) %>%
-  pivot_wider(
-    id_cols = party_combination,
-    names_from = party,
-    values_from = flag,
-    values_fill = 0
-  ) %>%
-  select(party_combination, all_of(PARTIES_TRANS))
-
-vec_party_combination = df_party_combination %>%
-  ungroup() %>%
-  distinct(party_combination) %>%
-  pull(party_combination) %>%
-  unique() %>%
-  sort()
-
-df = df %>%
-  left_join(df_party_combination %>%
-              distinct(uuid, party_combination),
-       by = "uuid") %>%
-  filter(party_combination %in% vec_party_combination) %>%
-  mutate(
-    party_combination_idx = as.integer(factor(party_combination, levels = vec_party_combination))
-  )
-
-
-# Create party index
-index_party <- create_party_index(PARTIES)
-# Create index pollster
-index_pollster = create_pollster_index(df)
-
-# Create date index with adjusted periods
-date_index_list <- create_date_indexes(
-  START_DATE, END_DATE,
-  LAYER1_PERIOD, LAYER2_PERIOD) # index_date, index_date_aggregate
-
-df_pollster_rounding = detect_pollster_rounding(df = df, 
-                                                index_pollster = index_pollster)
-
-
-# Transform input data
-input_data = transform_input_data(df = df, 
-                                  date_index_list = date_index_list, 
-                                  df_pollster_rounding = df_pollster_rounding, 
-                                  days_cutoff = 0)
-
-
-# Transform election data
-df_elections = df_elections %>%
-  left_join(date_index_list$index_date,
-            by = c("election_date" = "date"))
-
-N_reporting_patterns = length(vec_party_combination)
-reporting_pattern = input_data %>% 
-  pull(party_combination_idx)
-
-pattern_matrix = df_reporting_pattern %>%
-  arrange(factor(party_combination, levels = vec_party_combination)) %>%
-  select(-party_combination)
-
-party_list <- setNames(index_party$party_idx, index_party$party)
-
-party_indices = matrix(-99,
-           nrow = length(vec_party_combination),
-           ncol = length(party_list))
-party_count = rep(NA, length(vec_party_combination))
-for (i in 1:length(vec_party_combination)){
-  b = c()
-  for (j in names(party_list)){
-    if (grepl(j, vec_party_combination[i])){
-      b = c(b, party_list[[j]])
-    }
-  }
-  party_indices[i, 1:length(b)] = b
-  party_count[i] = length(b)
+if (!file.exists("data/results.csv") || !file.exists("data/pollsters.csv")) {
+  message("Reference data missing — running build_references()...")
+  build_results()
+  build_pollsters()
 }
 
 
+################################################################################
+# Load & Prepare Polling Data
+################################################################################
+
+df_long <- load_canonical_polls(parties = PARTIES)
+
+## Filter to modeling window
+df_long <- df_long %>%
+  filter(publishing_date >= START_DATE, publishing_date <= END_DATE)
+
+## Require at least the major parties (CDU/CSU, SPD, GRÜNE, FDP)
+MAJOR_PARTIES <- c("CDU/CSU", "SPD", "GRÜNE", "FDP")
+
+viable_polls <- df_long %>%
+  group_by(uuid) %>%
+  summarize(
+    n_major = sum(party %in% MAJOR_PARTIES & !is.na(vote_share) & vote_share > 0),
+    .groups = "drop"
+  ) %>%
+  filter(n_major == length(MAJOR_PARTIES)) %>%
+  pull(uuid)
+
+df_long <- df_long %>% filter(uuid %in% viable_polls)
+
+## Fill missing minor parties with 0
+df_long <- df_long %>%
+  mutate(vote_share = replace_na(vote_share, 0))
+
+message(sprintf("Using %d polls (require %d major parties, fill minor with 0)",
+                n_distinct(df_long$uuid), length(MAJOR_PARTIES)))
 
 
+################################################################################
+# Time Grid
+################################################################################
 
-list_party_presence = calculate_party_presence(input_data, PARTIES)
+period_breaks <- seq(START_DATE, END_DATE + 14, by = LAYER_PERIOD)
 
-pattern_starts_ends = calculate_pattern_starts_ends(input_data)
+date_to_tidx <- function(d) {
+  findInterval(d, period_breaks, rightmost.closed = TRUE)
+}
 
 
+################################################################################
+# Pivot to Wide & Build Response Matrix
+################################################################################
 
-# Calculate model dimensions
-n_layer1 <- max(date_index_list$index_date$layer1_aggregate_idx)
-n_layer2 <- max(date_index_list$index_date$layer2_aggregate_idx)
-n_parties <- length(PARTIES) - 1  # Number of parties
-n_surveys <- nrow(input_data)
+df_wide <- df_long %>%
+  mutate(party = factor(party, levels = PARTIES)) %>%
+  select(uuid, publishing_date, survey_count, party, vote_share) %>%
+  pivot_wider(names_from = party, values_from = vote_share) %>%
+  filter(!is.na(survey_count), survey_count > 0) %>%
+  mutate(t_idx = date_to_tidx(publishing_date))
 
-# Extract indices
-survey_layer1_idx <- input_data$layer1_aggregate_idx
-trend_layer2_idx <- date_index_list$index_date_aggregate$layer2_aggregate_idx  # From index_date, not input_data
+## Convert vote shares (%) to integer counts
+y_matrix <- df_wide %>%
+  select(all_of(PARTIES)) %>%
+  mutate(across(everything(), ~ floor(. / 100 * df_wide$survey_count))) %>%
+  as.matrix()
 
-# Rounding vector
-rounding_error_scale = input_data$rounding
+## Drop incomplete rows
+keep <- complete.cases(y_matrix) & rowSums(y_matrix) > 0
+y_matrix <- y_matrix[keep, ]
+t_idx    <- df_wide$t_idx[keep]
 
-# Create response matrix
-survey_y <- input_data %>%
+T_max <- max(t_idx)
+N     <- nrow(y_matrix)
+P     <- ncol(y_matrix)
+
+## Pre-aggregate polls by time period (sum counts within each period)
+y_df <- as.data.frame(y_matrix)
+y_df$t_idx <- t_idx
+agg <- aggregate(. ~ t_idx, data = y_df, FUN = sum)
+t_agg    <- agg$t_idx
+y_agg    <- as.matrix(agg[, -1])  # drop t_idx column
+N_agg    <- nrow(y_agg)
+
+message(sprintf("Stan data: T=%d periods, N=%d surveys (N_agg=%d unique periods), P=%d parties",
+                T_max, N, N_agg, P))
+
+
+################################################################################
+# Election Results (loaded before spline basis — knots placed at elections)
+################################################################################
+
+elections <- read_csv("data/results.csv", show_col_types = FALSE) %>%
+  filter(election_date >= START_DATE, election_date <= END_DATE)
+
+e_vote <- elections %>%
+  select(all_of(unname(COL_TO_PARTY))) %>%
+  rename(!!!COL_TO_PARTY) %>%
   select(all_of(PARTIES)) %>%
   as.matrix()
 
-# elections
-n_elections = df_elections %>% nrow
-election_layer1_idx = df_elections$layer1_aggregate_idx
-#election_y = df_elections %>%
-#  select(all_of(PARTIES))
+e_vote[is.na(e_vote)] <- 0
+## Replace zeros with small epsilon (Dirichlet needs all elements > 0)
+e_vote[e_vote == 0] <- 0.001
+e_vote <- e_vote / rowSums(e_vote)
 
-# spline
-n_knots <- 10
-spline_basis <- splines::bs(1:n_layer1, df = n_knots, degree = 3, intercept = TRUE)
+e_idx <- date_to_tidx(elections$election_date)
+
+## Only keep elections within the time grid
+keep_e <- e_idx >= 1 & e_idx <= T_max
+e_vote <- e_vote[keep_e, , drop = FALSE]
+e_idx  <- e_idx[keep_e]
+
+message(sprintf("Elections: %d within modeling window", length(e_idx)))
 
 
-mat = matrix(-99, nrow = nrow(list_party_presence$obs_idx), ncol = ncol(list_party_presence$obs_idx))
-for (i in 1:nrow(mat)){
-  for (j in 1:ncol(mat)){
-    if (list_party_presence$obs_idx[i, j] != -99){
-      mat[list_party_presence$obs_idx[i, j], j] = j
-    }
-  }
-  k = sum(mat[i, ] > 0)
-  v = mat[i, ]
-  mat[i, 1:k] = v[v > 0]
-  mat[i, (k + 1):ncol(mat)] = -99
-}
-parties_included = apply(mat, 1, function(x) sum( x> 0))
-mat = mat[, 1:max(parties_included)]
+################################################################################
+# B-Spline Basis — knots at election dates
+################################################################################
 
-PARTY_END_DATES = PARTY_END_DATES %>%
-  left_join(
-    date_index_list$index_date %>%
-      select(date, layer1_aggregate_idx) %>%
-      rename(start_date = date,
-             layer1_aggregate_idx_start = layer1_aggregate_idx)
-  ) %>%
-  left_join(
-    date_index_list$index_date %>%
-      select(date, layer1_aggregate_idx) %>%
-      rename(end_date = date,
-             layer1_aggregate_idx_end = layer1_aggregate_idx)
-  ) %>%
-  mutate(
-    party_always_entered = as.integer(is.na(layer1_aggregate_idx_start)),
-    party_never_exited = as.integer(is.na(layer1_aggregate_idx_end)),
-    layer1_aggregate_idx_start = ifelse(is.na(layer1_aggregate_idx_start),
-                                        -99, layer1_aggregate_idx_start),
-    layer1_aggregate_idx_end = ifelse(is.na(layer1_aggregate_idx_end),
-                                        -99, layer1_aggregate_idx_end),
-  )
+## Inner knots = election time indices (within grid bounds)
+knot_positions <- sort(unique(e_idx))
+## Ensure knots are strictly interior (not at boundaries)
+knot_positions <- knot_positions[knot_positions > 1 & knot_positions < T_max]
 
-# Create data list for Stan model
+B <- bs(1:T_max, knots = knot_positions, degree = 3, intercept = TRUE)
+B <- as.matrix(B)
+K <- ncol(B)
+
+message(sprintf("B-spline basis: K=%d basis functions (%d inner knots at election dates, degree 3)",
+                K, length(knot_positions)))
+
+
+################################################################################
+# Stan Data List — build observed-time lookups
+################################################################################
+
+## Unique observed time indices (union of poll periods + election periods)
+obs_idx <- sort(unique(c(t_agg, e_idx)))
+N_obs   <- length(obs_idx)
+
+## Lookup tables: map poll/election indices → position in obs_idx
+poll_obs_lookup <- match(t_agg, obs_idx)
+e_obs_lookup    <- match(e_idx, obs_idx)
+
+message(sprintf("Observed time points: %d of %d total periods (%.0f%% reduction in softmax calls)",
+                N_obs, T_max, (1 - N_obs / T_max) * 100))
+
 data_list <- list(
-  # Dimensions
-  n_layer1 = n_layer1,
-  n_layer2 = n_layer2,
-  n_parties_fixed = length(PARTIES_FIXED) + 1,
-  n_parties_trans = length(PARTIES_TRANS),
-  n_surveys = n_surveys,
-  time_aggregation = 7,
-  polling_error_correlation = 0.25,
-  
-  # Indices
-  survey_layer1_idx = survey_layer1_idx,
-  #survey_election_idx = survey_election_idx,
-  trend_layer2_idx  = trend_layer2_idx,
-  parties_survey_idx = t(list_party_presence$obs_idx),
-  residual_idx = length(PARTIES_FIXED) + 1,
-  negative_logit_zero = -5,
-  party_emergence_layer1_idx = PARTY_END_DATES$layer1_aggregate_idx_start,
-  party_disappearance_layer1_idx = PARTY_END_DATES$layer1_aggregate_idx_end,
-  party_always_entered = PARTY_END_DATES$party_always_entered,
-  party_never_exited = PARTY_END_DATES$party_never_exited,
-  
-  # Rounding
-  rounding_error_scale = rounding_error_scale,
-  
-  # Varying response options
-  R = nrow(pattern_starts_ends),
-  reporting_pattern = reporting_pattern,
-  pattern_matrix = as.matrix(pattern_matrix),
-  n_parties_presence = list_party_presence$n_parties_presence,
-  pattern_starts_ends = as.matrix(pattern_starts_ends),
-  
-  parties_survey_prediction_idx = mat,
-  n_parties_presence_prediction = parties_included,
-  
-  # Response data
-  survey_y = survey_y,
-  
-  # Dimensions elections
-  n_elections = n_elections,
-  
-  # Indices elections
-  #election_layer1_idx = election_layer1_idx,
-  
-  # Election data
-  #election_y = election_y,
-  
-  # Prior parameters
-  prior_volatility_short_term_mean_mu = 0.2,
-  prior_trend_short_term_length_scale_mean = 0,
-  prior_volatility_short_term_sigma = 0.2,
-  prior_trend_short_term_mean_sigma = 2,
-  prior_trend_mean_sigma = 20,
-  prior_spline_2nd_diff_scale = 1,
-  
-  # Splints
-  n_knots = n_knots,
-  spline_basis = as.matrix(spline_basis),
-  
-  # Model parameters
-  volatility_short_term_length_scale_data = 14,
-  trend_long_term_length_scale_data = 16,
-  
-  flag_inference = 1,
-  
-  n_remove = 0,
-  
-  ## Baseline
-  mat_party_indices = party_indices,
-  party_count = party_count,
-  idx_r = input_data$party_combination_idx,
-  
-  lfo_cutoff_index = 600
-)
-
-################################################################################
-# Model Fitting - Benchmark
-################################################################################
-
-mod = cmdstan_model(
-  stan_file = 'estimation/stan/benchmark/benchmark_forecast.stan',
-  stanc_options = list("O1")
+  T     = T_max,
+  P     = P,
+  K     = K,
+  B     = B,
+  N     = N_agg,
+  t_idx = t_agg,
+  y     = y_agg,
+  N_obs = N_obs,
+  obs_idx = obs_idx,
+  poll_obs_lookup = poll_obs_lookup,
+  E     = length(e_idx),
+  e_obs_lookup = e_obs_lookup,
+  e_vote = e_vote
 )
 
 
 ################################################################################
-# Model Fitting
+# Compile & Fit
 ################################################################################
 
+mod <- cmdstan_model("estimation/stan/spline.stan")
 
-mod <- cmdstan_model(
-  stan_file = "estimation/stan/gp_model_entering.stan",
-  stanc_options = list("O1")
-)
-
-# Fit the model
 fit <- mod$sample(
-  data = data_list,
-  chains = 6,
-  parallel_chains = 6,
-  iter_warmup = 500,
-  iter_sampling = 500,
-  refresh = 500
+  data            = data_list,
+  chains          = 4,
+  parallel_chains = 4,
+  iter_warmup     = 500,
+  iter_sampling   = 500,
+  refresh         = 100,
+  max_treedepth   = 10,
+  adapt_delta     = 0.9
 )
 
-starting_values = fit$summary("trend_voteshares") %>%
-  filter(
-    grepl("\\[2,", variable)
-  )
-plot_voting_trends(fit, index_date, df, election_dates, party_names = PARTIES,
-                   cutoff_date = max(df$date) - 120)
-plot_voting_trends <- function(fit,
-                               index_date,
-                               df,
-                               election_dates,
-                               party_names,
-                               cutoff_date,
-                               save_path = "estimation/plt/trends/") {
-  
-  party_colors <- c(
-    "CDU/CSU"  = "#000000",
-    "SPD"      = "#E3000F",
-    "GRÜNE"    = "#46962b",
-    "FDP"      = "#FFED00",
-    "LINKE"    = "#BE3075",
-    "Sonstige" = "#A4A4A4",
-    "REP"      = "#C8A050",
-    "PIRATEN"  = "#FF8800",
-    "AfD"      = "#009ee0"
-  )
-  
-  trend_data <- fit$summary("trend_voteshares", ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
-    mutate(
-      layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
-      ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
-      party = factor(party_names[ix_party], levels = names(party_colors))
-    ) %>%
-    right_join(index_date %>% select(date, layer1_aggregate_idx), relationship = "many-to-many")
-  
-  observed_data <- df %>%
-    group_by(uuid, party, date) %>%
-    summarize(vote_share = sum(vote_share) / 100, .groups = "drop")
-  
-  relevant_elections <- election_dates %>%
-    filter(date >= min(trend_data$date), date <= max(trend_data$date))
-  
-  plot <- ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
-    geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), alpha = 0.125, color = NA) +
-    geom_ribbon(aes(ymin = `25%`, ymax = `75%`), alpha = 0.25, color = NA) +
-    geom_line(linewidth = 1) +
-    geom_point(data = observed_data, aes(y = vote_share), size = 2) +
-    geom_hline(yintercept = 0.05, linetype = "dashed", alpha = 0.5) +
-    geom_vline(xintercept = relevant_elections$date, linetype = "dashed", color = "darkred", alpha = 0.5) +
-    geom_vline(xintercept = cutoff_date, linetype = "twodash", alpha = 0.75) +
-    annotate("label", x = min(trend_data$date), y = 0.05, label = "5% threshold",
-             hjust = 0, size = 3, fill = "white", alpha = 0.8) +
-    scale_color_manual(values = party_colors) +
-    scale_fill_manual(values = party_colors) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 0.5)) +
-    labs(
-      title = "Overall Vote Shares Over Time",
-      subtitle = "Combined long-term and short-term trends\nLines show median with 50% and 95% credible intervals",
-      y = "Vote Share"
-    ) +
-    theme_light() +
-    theme(
-      panel.grid.minor = element_blank(),
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      axis.title.x = element_blank(),
-      legend.position = "bottom",
-      legend.title = element_blank()
-    )
-  
-  ggsave(file.path(save_path, "overall_trend.png"), plot, width = 12, height = 8, dpi = 300)
-}
+message("Fitting complete.")
+fit$summary("tau")
+fit$summary("phi")
+fit$cmdstan_diagnose()
 
-function(fit, input_data, 
-         index_date,
-         df, 
-         election_dates, 
-         party_names,
-         cutoff_date,
-         save_path = "estimation/plt/trends/") {
-  
-  # Traditional German party colors
-  party_colors <- c(
-    "CDU/CSU" = "#000000",  # Black
-    "SPD"     = "#E3000F",  # Red
-    "GRÜNE"   = "#46962b",  # Green
-    "FDP"     = "#FFED00",  # Yellow
-    "LINKE"   = "#BE3075",  # Purple/Pink
-    "Sonstige" = "#A4A4A4", # Grey
-    "REP"     = "#C8A050",  # Brown
-    "PIRATEN" = "#FF8800",  # Orange
-    "AfD"     = "#009ee0"   # Light blue
-  )
-  
-  # Helper function to prepare trend data
-  prepare_trend_data <- function(trend_var) {
-    fit$summary(trend_var, ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))) %>%
-      mutate(
-        layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
-        ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
-        party = factor(
-          party_names[ix_party],
-          levels = names(party_colors)
-        )
-      ) %>%
-      right_join(index_date %>% 
-                   select(date, layer1_aggregate_idx),
-                 relationship = 'many-to-many')
-  }
-  
-  # Helper function to filter relevant election dates
-  get_relevant_elections <- function(trend_data) {
-    election_dates %>%
-      filter(
-        date >= min(trend_data$date),
-        date <= max(trend_data$date)
-      )
-  }
-  
-  # Prepare observed data (shared across all plots)
-  observed_data <- df %>% 
-    group_by(uuid, party, date) %>%
-    summarize(vote_share = sum(vote_share)) %>%
-    ungroup() %>%
-    mutate(vote_share = vote_share / 100)
-  
-  # Helper function to create trend plot
-  create_trend_plot <- function(trend_data, title_prefix, trend_description, trend_var) {
-    relevant_elections <- get_relevant_elections(trend_data)
-    
-    # Define legend settings based on plot type
-    legend_settings <- if (grepl("short_term", trend_var)) {
-      theme(legend.position = "none")
-    } else {
-      theme(
-        legend.position = "bottom",
-        legend.title = element_blank()
-      )
-    }
-    
-    ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
-      # Add uncertainty bands
-      geom_ribbon(
-        aes(ymin = `2.5%`, ymax = `97.5%`),
-        alpha = 0.125,
-        color = NA
-      ) +
-      geom_ribbon(
-        aes(ymin = `25%`, ymax = `75%`),
-        alpha = 0.25,
-        color = NA
-      ) +
-      # Add trend lines and observed points (if applicable)
-      geom_line(linewidth = 1) +
-      {if (!grepl("short_term", trend_var)) 
-        geom_point(
-          data = observed_data,
-          aes(y = vote_share),
-          size = 2
-        )
-      } +
-      # Customize appearance
-      scale_color_manual(values = party_colors) +
-      scale_fill_manual(values = party_colors) +
-      {if (grepl("short_term", trend_var)) {
-        facet_wrap(~party, ncol = 2)
-      }} + 
-      {if (grepl("short_term", trend_var)) {
-        scale_y_continuous(
-          labels = scales::percent_format(accuracy = 1),
-          name = "Percentage Difference from Long-term Average",
-          # Let the limits be determined by the data
-          expand = expansion(mult = 0.05)
-        )
-      } else {
-        scale_y_continuous(
-          labels = scales::percent_format(accuracy = 1),
-          limits = c(0, 0.5),
-          name = "Vote Share"
-        )
-      }} +
-      theme_light() +
-      theme(
-        panel.grid.minor = element_blank(),
-        axis.text.x = element_text(angle = 45, hjust = 1),
-        axis.title.x = element_blank()
-      ) +
-      legend_settings +
-      # Add 5% threshold line and annotation for non-short-term plots
-      {if (!grepl("short_term", trend_var)) {
-        list(
-          geom_hline(
-            yintercept = 0.05,
-            linetype = "dashed",
-            color = "black",
-            alpha = 0.5
-          ),
-          annotate(
-            "label",
-            x = min(trend_data$date, na.rm = TRUE),
-            y = 0.05,
-            label = "5% electoral threshold",
-            hjust = 0,
-            size = 3,
-            fill = "white",
-            alpha = 0.8,
-            label.r = unit(0.15, "lines")
-          )
-        )
-      }} +
-      # Add labels
-      labs(
-        title = paste0(title_prefix, " Vote Shares Over Time"),
-        subtitle = paste0(trend_description, "\nLines show median predictions with 50% and 95% credible intervals"),
-        x = "Date",
-        y = "Vote Share",
-        caption = "Points show observed data. Bands show 50% (darker) and 95% (lighter) credible intervals."
-      ) +
-      # Add election date markers and labels
-      geom_vline(
-        data = relevant_elections,
-        aes(xintercept = date),
-        linetype = "dashed",
-        color = "darkred",
-        alpha = 0.5
-      ) +
-      geom_text(
-        data = relevant_elections,
-        aes(
-          x = date,
-          y = max(trend_data$`97.5%`) -0.01,
-          label = format(date, "%b %Y")
-        ),
-        angle = 90,
-        hjust = 0.25,
-        vjust = -0.45,
-        size = 3,
-        color = "darkred",
-        inherit.aes = FALSE
-      ) +
-      # Add cutoff date marker and label
-      geom_vline(
-        data = data.frame(date = cutoff_date),
-        aes(xintercept = date),
-        linetype = "twodash",
-        alpha = 0.75
-      ) +
-      geom_text(
-        data = data.frame(date = cutoff_date),
-        aes(
-          x = date,
-          y = max(trend_data$`97.5%`) -0.01,
-          label = "Data cutoff"
-        ),
-        angle = 90,
-        hjust = 0.25,
-        vjust = -0.45,
-        size = 3,
-        inherit.aes = FALSE
-      )
-  }
-  
-  # Define trend components
-  trend_components <- 
-    list(
-      var = "trend_voteshares",
-      prefix = "Overall",
-      desc = "Combined long-term and short-term trends",
-      filename = "overall_trend_baseline.png"
-    )
-  
-  index_date = date_index_list$index_date
-  # Create and save all plots
-  plots <- list()
-  
-    # Prepare trend data
-    trend_data <- prepare_trend_data(trend_components$var)
-    
-    # Create plot
-    plot <- create_trend_plot(
-      trend_data = trend_data,
-      title_prefix = trend_components$prefix,
-      trend_description = trend_components$desc,
-      trend_var = trend_components$var
-    )
-    
-    # Save plot
-    ggsave(
-      filename = file.path(save_path, component$filename),
-      plot = plot,
-      width = 12,
-      height = 8,
-      dpi = 300
-    )
-    
-    plots[[component$var]] <- plot
-  }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+## Profiling
+message("\n===== PROFILING =====")
+prof <- fit$profiles()
+prof_summary <- do.call(rbind, lapply(1:length(prof), function(chain_name) {
+  df <- prof[[chain_name]]
+  df$chain <- chain_name
+  df
+}))
+prof_agg <- aggregate(
+  cbind(total_time, forward_time, reverse_time) ~ name,
+  data = prof_summary, FUN = mean
+)
+prof_agg <- prof_agg[order(-prof_agg$total_time), ]
+print(prof_agg)
+message("=====================\n")
 
 
 ################################################################################
-# Model Evaluation and Visualization
+# Extract Trends
 ################################################################################
 
-calculate_elpd(fit, data_list$n_remove)
+pi_summary <- fit$summary(
+  "pi", ~quantile(., c(0.05, 0.10, 0.25, 0.5, 0.75, 0.90, 0.95))
+)
 
-calculate_ppc(fit, data_list$survey_y, n_remove)
-
-
-
-
-
-
-
-
-
-
-## Posterior Predictive Checks
-create_vote_share_ppc(fit, data_list, 100)
-
-
-## Parameter Analysis
-# Compare alpha parameters across parties
-compare_alpha_parameters(fit, 
-                         party_names = PARTIES)
-
-# Analyze party correlations
-plot_party_correlations(fit, 
-                        party_names = PARTIES,
-                        n_draws = 10,
-                        save_path = "estimation/plt/prior_posterior/")
-
-# Compare length scales
-plot_length_scale_comparison(fit, 
-                             data_list$prior_trend_short_term_length_scale_mean)
-
-################################################################################
-# Trend Analysis and Results Export
-################################################################################
-
-fit$summary("election_trend_probabilities") %>%
-  select(variable, mean) %>%
+trend <- pi_summary %>%
   mutate(
-    election_idx = as.integer(str_match(variable, "\\[(\\d+)")[, 2]),
-    party_idx = as.integer(str_match(variable, "(\\d+)\\]")[, 2]),
+    t     = as.integer(str_match(variable, "\\[(\\d+),")[, 2]),
+    p     = as.integer(str_match(variable, ",(\\d+)\\]")[, 2]),
+    party = factor(PARTIES[p], levels = names(PARTY_COLORS)),
+    date  = period_breaks[t]
   ) %>%
-  select(-variable) %>%
-  pivot_wider(
-    id_cols = election_idx,
-    values_from = mean,
-    names_from = party_idx
+  filter(!is.na(date))
+
+
+################################################################################
+# Plot
+################################################################################
+
+polls_overlay <- df_wide[keep, ] %>%
+  select(publishing_date, all_of(PARTIES)) %>%
+  pivot_longer(-publishing_date, names_to = "party", values_to = "pct") %>%
+  mutate(
+    party = factor(party, levels = names(PARTY_COLORS)),
+    pct   = pct / 100
   )
 
-plot_polling_error_trend
+p <- ggplot(trend, aes(x = date, color = party, fill = party)) +
+  geom_ribbon(aes(ymin = `5%`, ymax = `95%`), alpha = 0.12, color = NA) +
+  geom_ribbon(aes(ymin = `25%`, ymax = `75%`), alpha = 0.25, color = NA) +
+  geom_line(aes(y = `50%`), linewidth = 0.8) +
+  geom_point(data = polls_overlay,
+             aes(x = publishing_date, y = pct),
+             size = 0.3, alpha = 0.15) +
+  geom_vline(xintercept = elections$election_date,
+             linetype = "dotted", color = "grey50", linewidth = 0.3) +
+  scale_color_parties() +
+  scale_fill_parties() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     limits = c(0, 0.5)) +
+  labs(
+    title    = "B-spline polling model",
+    subtitle = "Cubic B-splines on log-odds, Dirichlet-multinomial likelihood. Bands = 50%/90% CI.",
+    y        = "Vote share"
+  ) +
+  theme_forecast()
 
-fit$summary("neg_logit_end_state")
-
-## Visualize Trends
-# Plot main vote share trends
-plot_vote_share_trends(fit, 
-                       input_data, 
-                       date_index_list$index_date, 
-                       df, 
-                       party_names = PARTIES,
-                       election_dates, 
-                       cutoff_date = max(df$date) - 120)
-
-# Plot trend volatility
-plot_trend_volatility(fit, date_index_list$index_date, election_dates)
-
-plot_transition_weights(fit, date_index_list$index_date, PARTIES_TRANS)
-
-
-## Export Results
-# Save daily vote share estimates
-save_daily_vote_shares(fit,
-                       index_date = index_date,
-                       save_path = "web/public/estimated_trends/",
-                       filename = "daily_vote_shares.csv")
+PLT_DIR <- "estimation/plt/spline"
+dir.create(PLT_DIR, recursive = TRUE, showWarnings = FALSE)
+ggsave(file.path(PLT_DIR, "trend.png"), p, width = 14, height = 7, dpi = 200)
+message("Saved: trend.png")
 
 
+################################################################################
+# Save Posterior
+################################################################################
+
+saveRDS(list(
+  fit           = fit,
+  data_list     = data_list,
+  trend         = trend,
+  parties       = PARTIES,
+  dates         = period_breaks[1:T_max],
+  period_breaks = period_breaks,
+  elections     = elections,
+  e_vote        = e_vote,
+  e_idx         = e_idx,
+  t_agg         = t_agg,
+  y_agg         = y_agg,
+  N_agg         = N_agg
+), file = "data/spline_fit.rds")
+message("Saved: data/spline_fit.rds")
 
 
-plot_polling_error <- function(fit, 
-                               input_data,
-                               index_date,
-                               df,
-                               election_dates,
-                               party_names,
-                               cutoff_date,
-                               save_path = "estimation/plt/trends/") {
-  
-  # Traditional German party colors
-  party_colors <- c(
-    "CDU/CSU" = "#000000",  # Black
-    "SPD"     = "#E3000F",  # Red
-    "GRÜNE"   = "#46962b",  # Green
-    "FDP"     = "#FFED00",  # Yellow
-    "LINKE"   = "#BE3075",  # Purple/Pink
-    "Sonstige" = "#A4A4A4", # Grey
-    "REP"     = "#C8A050"
-  )
-  
-  # Prepare trend data
-  trend_data <- fit$summary(
-    "polling_error",
-    ~quantile(., c(0.025, 0.25, 0.5, 0.75, 0.975))
-  ) %>%
-    mutate(
-      layer1_aggregate_idx = as.integer(str_match(variable, "(\\d+),")[, 2]),
-      ix_party = as.integer(str_match(variable, ",(\\d+)")[, 2]),
-      party = factor(
-        party_names[ix_party],
-        levels = names(party_colors)
-      )
-    ) %>%
-    right_join(index_date %>% 
-                 select(date, layer1_aggregate_idx))
-  
-  # Get relevant elections
-  relevant_elections <- election_dates %>%
-    filter(
-      date >= min(trend_data$date),
-      date <= max(trend_data$date)
-    )
-  
-  # Create plot
-  plot <- ggplot(trend_data, aes(x = date, y = `50%`, color = party, fill = party)) +
-    # Add uncertainty bands
-    geom_ribbon(
-      aes(ymin = `2.5%`, ymax = `97.5%`),
-      alpha = 0.125,
-      color = NA
-    ) +
-    geom_ribbon(
-      aes(ymin = `25%`, ymax = `75%`),
-      alpha = 0.25,
-      color = NA
-    ) +
-    # Add trend line
-    geom_line(linewidth = 1) +
-    # Customize appearance
-    scale_color_manual(values = party_colors) +
-    scale_fill_manual(values = party_colors) +
-    scale_y_continuous(
-      labels = scales::percent_format(accuracy = 1),
-      name = "Polling Error",
-      expand = expansion(mult = 0.05)
-    ) +
-    theme_light() +
-    theme(
-      panel.grid.minor = element_blank(),
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      axis.title.x = element_blank(),
-      legend.position = "bottom",
-      legend.title = element_blank()
-    ) +
-    # Add labels
-    labs(
-      title = "Polling Error Over Time",
-      subtitle = "Lines show median predictions with 50% and 95% credible intervals",
-      x = "Date",
-      y = "Polling Error",
-      caption = "Bands show 50% (darker) and 95% (lighter) credible intervals."
-    ) +
-    # Add election date markers and labels
-    geom_vline(
-      data = relevant_elections,
-      aes(xintercept = date),
-      linetype = "dashed",
-      color = "darkred",
-      alpha = 0.5
-    ) +
-    geom_text(
-      data = relevant_elections,
-      aes(
-        x = date,
-        y = max(trend_data$`97.5%`) -0.01,
-        label = format(date, "%b %Y")
-      ),
-      angle = 90,
-      hjust = 0.25,
-      vjust = -0.45,
-      size = 3,
-      color = "darkred",
-      inherit.aes = FALSE
-    ) +
-    # Add cutoff date marker and label
-    geom_vline(
-      data = data.frame(date = cutoff_date),
-      aes(xintercept = date),
-      linetype = "twodash",
-      alpha = 0.75
-    ) +
-    geom_text(
-      data = data.frame(date = cutoff_date),
-      aes(
-        x = date,
-        y = max(trend_data$`97.5%`) -0.01,
-        label = "Data cutoff"
-      ),
-      angle = 90,
-      hjust = 0.25,
-      vjust = -0.45,
-      size = 3,
-      inherit.aes = FALSE
-    )
-  
-  # Save plot
-  ggsave(
-    filename = file.path(save_path, "polling_error.png"),
-    plot = plot,
-    width = 12,
-    height = 8,
-    dpi = 300
-  )
-  
-  return(plot)
-}
+################################################################################
+# Export JSON for Frontend
+################################################################################
 
-
+source("estimation/export.R")
+export_all(
+  fit_path   = "data/spline_fit.rds",
+  polls_path = "data/polls.csv",
+  out_dir    = "web/public/data/"
+)
+message("JSON export complete.")

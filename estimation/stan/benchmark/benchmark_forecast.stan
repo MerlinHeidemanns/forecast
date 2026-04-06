@@ -29,7 +29,7 @@ data {
   array[R] int<upper=n_parties_fixed + n_parties_trans> party_count;
   
   // Response data
-  array[n_surveys, n_parties_fixed + n_parties_trans] int<lower=0> survey_y;
+  array[n_surveys, n_parties_fixed + n_parties_trans] int survey_y;
   int<lower=1> residual_idx;
   
   // Party emergence timing
@@ -82,7 +82,6 @@ transformed data {
 
 parameters {
   matrix[n_layer1, n_parties - 1] trend_std_normal;
-  cholesky_factor_corr[n_parties - 1] trend_party_corr_chol;
   vector<lower=0>[n_parties - 1] trend_variability;
   simplex[n_parties_fixed] starting_values_vote_share;
   array[n_parties_trans] real<lower=0> transition_rate;
@@ -92,23 +91,20 @@ transformed parameters {
   matrix[n_layer1, n_parties] trend_log_odds;
   matrix[n_surveys, n_parties] survey_probs;
   
-  // Σ = diag(σ) × L × Lᵀ × diag(σ)  (only store cholesky factor)
-  matrix[n_parties - 1, n_parties - 1] trend_cov_chol = 
-    diag_pre_multiply(trend_variability, trend_party_corr_chol);
-  
   // Random walk on log-odds (party 1 = reference):
   //   α[1] = log(π₀ / π₀[1])
   //   α[t] = α[t-1] + ε[t],  ε[t] ~ N(0, Σ)
   profile("random_walk") {
-    trend_log_odds[1, 1] = 0;
-    trend_log_odds[1, 2:n_parties_fixed] = 
+    row_vector[n_parties - 1] init;
+    init[1:(n_parties_fixed - 1)] = 
       log(to_row_vector(starting_values_vote_share[2:]) / starting_values_vote_share[1]);
-    trend_log_odds[1, (n_parties_fixed + 1):n_parties] = rep_row_vector(-5, n_parties_trans);
+    init[n_parties_fixed:(n_parties - 1)] = rep_row_vector(-5, n_parties_trans);
     
-    for (t in 2:n_layer1) {
-      trend_log_odds[t, 1] = 0;
-      trend_log_odds[t, 2:n_parties] = 
-        trend_log_odds[t - 1, 2:n_parties] + trend_std_normal[t,] * trend_cov_chol;
+    trend_log_odds[, 1] = rep_vector(0, n_layer1);
+    for (p in 1:(n_parties - 1)) {
+      trend_log_odds[1, p + 1] = init[p];
+      trend_log_odds[2:n_layer1, p + 1] = init[p] + 
+        trend_variability[p] * cumulative_sum(trend_std_normal[2:n_layer1, p]);
     }
   }
   
@@ -145,7 +141,6 @@ model {
   //   rate ~ InvGamma(3, 2)
   profile("priors") {
     to_vector(trend_std_normal) ~ std_normal();
-    trend_party_corr_chol ~ lkj_corr_cholesky(1);
     trend_variability ~ normal(0, 0.1);
     starting_values_vote_share ~ dirichlet(rep_vector(1, n_parties_fixed));
     transition_rate ~ inv_gamma(3, 2);
